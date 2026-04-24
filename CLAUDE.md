@@ -60,6 +60,10 @@ The GSI 陰影起伏図 is attached to a **custom Leaflet pane** (`hillshadePane
 
 `#lat=<5dp>&lng=<5dp>&z=<int>`. Parsed by `readInitialView`; written by `writeViewToHash`. If no valid hash is present on load, the app falls back to `DEFAULT_VIEW` (鹿島槍ヶ岳 — the "双耳峰" the project is named after) and then attempts `navigator.geolocation.getCurrentPosition`. When the hash **is** present, geolocation is skipped so a shared link lands on the intended view.
 
+### Persisted preferences (localStorage)
+
+`localStorage["souji-maps-prefs"]` stores JSON `{ leftOverlays: string[], rightOverlays: string[], rightBasemap: string }` — lists of overlay display names (the keys used in `L.control.layers`) plus the active right-pane preset name. `readPrefs` / `writePrefs` guard against disabled storage (private mode); `setupPersistentOverlays(map, overlays, defaultsOn, prefsKey)` is the single helper for both panes, wiring the `overlayadd` / `overlayremove` map events. The right-basemap `<select>` change handler calls `writePrefs({ rightBasemap: name })` directly. **Position/zoom is not persisted here** — the URL hash owns that, so sharing a link still wins over a stored preference. Unknown preset names (e.g. a provider removed from `config.js`) fall back to the default without overwriting the saved value, so re-enabling the provider restores the user's choice.
+
 ## Conventions
 
 - Code, code comments, and commit messages: English.

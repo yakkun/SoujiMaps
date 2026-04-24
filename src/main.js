@@ -1106,6 +1106,51 @@ function updateStatus(center) {
   document.getElementById("status-lng").textContent = center.lng.toFixed(5);
 }
 
+// ── User preferences (localStorage) ──
+// Persist overlay toggles and the right-pane basemap so repeat visits land in
+// the same state. URL hash still owns position/zoom — prefs only cover layer
+// selection. Private mode / disabled storage is tolerated silently.
+const PREFS_KEY = "souji-maps-prefs";
+function readPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function writePrefs(patch) {
+  try {
+    const next = { ...readPrefs(), ...patch };
+    localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+  } catch {
+    // storage unavailable — just drop the write
+  }
+}
+
+// Wire an overlay-control to localStorage. `overlays` is the same name→layer
+// object passed to L.control.layers; `defaultsOn` is the Set of names that
+// start enabled when no prefs exist. Layers whose names appear in the saved
+// list are added to the map; subsequent toggles persist automatically.
+function setupPersistentOverlays(map, overlays, defaultsOn, prefsKey) {
+  const saved = readPrefs()[prefsKey];
+  const initialOn = Array.isArray(saved)
+    ? new Set(saved.filter((n) => n in overlays))
+    : defaultsOn;
+  Object.entries(overlays).forEach(([name, layer]) => {
+    if (initialOn.has(name)) layer.addTo(map);
+  });
+  const persist = () => {
+    const on = Object.entries(overlays)
+      .filter(([, layer]) => map.hasLayer(layer))
+      .map(([name]) => name);
+    writePrefs({ [prefsKey]: on });
+  };
+  map.on("overlayadd overlayremove", persist);
+}
+
 // Presets may declare a `requires` field (API key / feature flag). When it's
 // present, the preset is included only if the value is truthy — lets the
 // dropdown hide providers the user hasn't configured.
@@ -1194,27 +1239,33 @@ function init() {
   const courseLayer = buildCourseLayer();
   const pointLayer = buildPointLayer();
 
-  // デフォルトで有効にするオーバーレイ
-  footprintOverlays["みんなの足跡 (夏期)"].addTo(mapLeft);
-  courseLayer.addTo(mapLeft);
-  pointLayer.addTo(mapLeft);
-
-  const overlays = {
+  const leftOverlays = {
     登山道: courseLayer,
     "山頂・山小屋・登山口など": pointLayer,
     ...footprintOverlays,
   };
+  setupPersistentOverlays(
+    mapLeft,
+    leftOverlays,
+    new Set(["登山道", "山頂・山小屋・登山口など", "みんなの足跡 (夏期)"]),
+    "leftOverlays",
+  );
   L.control
-    .layers(null, overlays, { collapsed: true, position: "topright" })
+    .layers(null, leftOverlays, { collapsed: true, position: "topright" })
     .addTo(mapLeft);
 
-  // 右ペインの basemap はヘッダの <select> で切り替える。RIGHT_LAYERS の
-  // index 0 をデフォルトで ON にし、select の変更に合わせてレイヤーを差し替える。
+  // 右ペインの basemap はヘッダの <select> で切り替える。prefs に保存された
+  // preset 名があればそれを初期選択に、無ければ RIGHT_LAYERS[0] を使う。
   const rightBasemaps = buildRightBasemaps();
-  let activeRightBasemap = rightBasemaps[0];
+  const savedBasemapName = readPrefs().rightBasemap;
+  const savedBasemapIdx = rightBasemaps.findIndex(
+    ({ preset }) => preset.name === savedBasemapName,
+  );
+  const initialBasemapIdx = savedBasemapIdx >= 0 ? savedBasemapIdx : 0;
+  let activeRightBasemap = rightBasemaps[initialBasemapIdx];
   activeRightBasemap.layer.addTo(mapRight);
   applyRightPaneHeader(activeRightBasemap.preset);
-  const basemapSelect = populateRightBasemapSelect(rightBasemaps, 0);
+  const basemapSelect = populateRightBasemapSelect(rightBasemaps, initialBasemapIdx);
   basemapSelect?.addEventListener("change", () => {
     const next = rightBasemaps[Number(basemapSelect.value)];
     if (!next || next === activeRightBasemap) return;
@@ -1222,6 +1273,7 @@ function init() {
     next.layer.addTo(mapRight);
     activeRightBasemap = next;
     applyRightPaneHeader(next.preset);
+    writePrefs({ rightBasemap: next.preset.name });
   });
 
   // OSM 側のオーバーレイ
@@ -1237,18 +1289,18 @@ function init() {
 
   const waymarkedLayer = buildWaymarkedHikingLayer();
   const hillshadeLayer = buildGsiHillshadeLayer("hillshadePane");
-  hillshadeLayer.addTo(mapRight); // 地形感は常時欲しいのでデフォルト ON
-  waymarkedLayer.addTo(mapRight); // 登山道 overlay もデフォルト ON
-
+  const rightOverlays = {
+    "登山道 (Waymarked Trails)": waymarkedLayer,
+    "陰影起伏図 (地理院)": hillshadeLayer,
+  };
+  setupPersistentOverlays(
+    mapRight,
+    rightOverlays,
+    new Set(["登山道 (Waymarked Trails)", "陰影起伏図 (地理院)"]),
+    "rightOverlays",
+  );
   L.control
-    .layers(
-      null,
-      {
-        "登山道 (Waymarked Trails)": waymarkedLayer,
-        "陰影起伏図 (地理院)": hillshadeLayer,
-      },
-      { collapsed: true, position: "topright" },
-    )
+    .layers(null, rightOverlays, { collapsed: true, position: "topright" })
     .addTo(mapRight);
 
   // Ensure both maps size correctly after layout settles.
