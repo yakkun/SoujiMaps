@@ -734,6 +734,262 @@ const RIGHT_LAYERS = [
   },
 ];
 
+// ── 地名検索 (Nominatim) ──
+// OSM の公開ジオコーダで山名・地名・駅名を横断検索する。Usage Policy の
+// 目安 (1 req/sec, Referer 必須) を守るため、入力は debounce + クエリ単位の
+// メモ化で抑える。結果は class/type でカテゴリ分類し、山・駅・集落など
+// 日本語バッジと種別ごとの zoom で表示する。
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+const SEARCH_DEBOUNCE_MS = 220; // 通常の入力 (確定済み文字の追加)
+const SEARCH_COMPOSITION_END_MS = 60; // IME 確定直後は体感ほぼ即時で再検索
+const SEARCH_FETCH_LIMIT = 12; // Nominatim に要求する件数
+const SEARCH_DISPLAY_LIMIT = 8; // 並べ替え後にリストへ出す件数
+const SEARCH_CACHE = new Map();
+
+// rank is used to reorder Nominatim results client-side: e.g. "新宿駅" returns
+// many highway/footway station-exit nodes before the actual railway/station.
+// Lower rank wins. Ties fall back to Nominatim's own importance ordering.
+function classifySearchResult(r) {
+  // jsonv2 renames `class` to `category`; keep both paths so either format works.
+  const cls = r.class ?? r.category;
+  const typ = r.type;
+  if (cls === "natural") {
+    if (typ === "peak") return { label: "山", zoom: 14, rank: 10 };
+    if (typ === "volcano") return { label: "火山", zoom: 14, rank: 10 };
+    if (typ === "valley") return { label: "谷", zoom: 13, rank: 15 };
+    if (typ === "ridge") return { label: "尾根", zoom: 13, rank: 15 };
+    if (typ === "water") return { label: "水域", zoom: 13, rank: 15 };
+    if (typ === "cape") return { label: "岬", zoom: 13, rank: 15 };
+  }
+  if (cls === "railway") {
+    if (typ === "station" || typ === "halt" || typ === "tram_stop") {
+      return { label: "駅", zoom: 15, rank: 20 };
+    }
+    if (typ === "subway_entrance" || typ === "train_station_entrance") {
+      return { label: "駅入口", zoom: 16, rank: 28 };
+    }
+  }
+  if (cls === "highway" && typ === "bus_stop") return { label: "バス停", zoom: 16, rank: 25 };
+  if (cls === "place") {
+    if (typ === "city" || typ === "town") return { label: "市町", zoom: 12, rank: 30 };
+    if (typ === "village" || typ === "hamlet") return { label: "集落", zoom: 14, rank: 30 };
+    if (typ === "suburb" || typ === "neighbourhood" || typ === "quarter") {
+      return { label: "地区", zoom: 14, rank: 35 };
+    }
+    if (typ === "island") return { label: "島", zoom: 11, rank: 30 };
+    if (typ === "locality") return { label: "地名", zoom: 13, rank: 35 };
+  }
+  if (cls === "tourism") {
+    if (typ === "alpine_hut" || typ === "wilderness_hut") return { label: "山小屋", zoom: 15, rank: 40 };
+    if (typ === "camp_site") return { label: "キャンプ場", zoom: 15, rank: 40 };
+    if (typ === "viewpoint") return { label: "展望", zoom: 15, rank: 40 };
+    if (typ === "attraction") return { label: "名所", zoom: 15, rank: 45 };
+  }
+  if (cls === "amenity") {
+    if (typ === "parking") return { label: "駐車場", zoom: 16, rank: 50 };
+    if (typ === "shelter") return { label: "避難所", zoom: 16, rank: 50 };
+  }
+  if (cls === "boundary") return { label: "行政区", zoom: 11, rank: 60 };
+  if (cls === "waterway") return { label: "水系", zoom: 13, rank: 60 };
+  return { label: "", zoom: 14, rank: 90 };
+}
+
+function sortByRank(results) {
+  return results
+    .map((r, i) => ({ r, i, rank: classifySearchResult(r).rank }))
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .slice(0, SEARCH_DISPLAY_LIMIT)
+    .map(({ r }) => r);
+}
+
+async function fetchSearch(query) {
+  const q = query.trim();
+  if (!q) return [];
+  if (SEARCH_CACHE.has(q)) return SEARCH_CACHE.get(q);
+  const params = new URLSearchParams({
+    format: "jsonv2",
+    q,
+    countrycodes: "jp",
+    "accept-language": "ja",
+    limit: String(SEARCH_FETCH_LIMIT),
+    addressdetails: "1",
+  });
+  const res = await fetch(`${NOMINATIM_URL}?${params.toString()}`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Nominatim ${res.status}`);
+  const data = await res.json();
+  SEARCH_CACHE.set(q, data);
+  return data;
+}
+
+function firstSegment(displayName) {
+  return String(displayName || "").split(",")[0].trim();
+}
+
+function setupSearch(onSelect) {
+  const input = document.getElementById("search-input");
+  const list = document.getElementById("search-results");
+  if (!input || !list) return;
+
+  let debounceT = null;
+  let reqSeq = 0;
+  let items = [];
+  let activeIdx = -1;
+
+  const setExpanded = (open) => {
+    input.setAttribute("aria-expanded", String(open));
+    list.hidden = !open;
+  };
+
+  const hide = () => {
+    items = [];
+    activeIdx = -1;
+    list.replaceChildren();
+    setExpanded(false);
+  };
+
+  const setActive = (idx) => {
+    const lis = list.querySelectorAll(".search-item");
+    lis.forEach((el, i) => el.classList.toggle("active", i === idx));
+    activeIdx = idx;
+    if (idx >= 0 && lis[idx]) {
+      lis[idx].scrollIntoView({ block: "nearest" });
+    }
+  };
+
+  const choose = (idx) => {
+    const r = items[idx];
+    if (!r) return;
+    const meta = classifySearchResult(r);
+    onSelect(Number(r.lat), Number(r.lon), meta.zoom);
+    input.value = r.name || firstSegment(r.display_name);
+    hide();
+    input.blur();
+  };
+
+  const render = (results) => {
+    items = results;
+    list.replaceChildren();
+    if (results.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "search-empty";
+      empty.textContent = "該当なし";
+      list.appendChild(empty);
+      setExpanded(true);
+      activeIdx = -1;
+      return;
+    }
+    results.forEach((r, i) => {
+      const meta = classifySearchResult(r);
+      const title = r.name || firstSegment(r.display_name);
+
+      const li = document.createElement("li");
+      li.className = "search-item";
+      li.setAttribute("role", "option");
+      li.dataset.idx = String(i);
+
+      if (meta.label) {
+        const badge = document.createElement("span");
+        badge.className = "search-badge";
+        badge.textContent = meta.label;
+        li.appendChild(badge);
+      }
+
+      const text = document.createElement("span");
+      text.className = "search-text";
+
+      const titleEl = document.createElement("span");
+      titleEl.className = "search-title";
+      titleEl.textContent = title;
+
+      const subEl = document.createElement("span");
+      subEl.className = "search-sub";
+      subEl.textContent = r.display_name || "";
+
+      text.append(titleEl, subEl);
+      li.appendChild(text);
+
+      // mousedown + preventDefault so the input keeps focus until click fires.
+      li.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        choose(i);
+      });
+      li.addEventListener("mouseenter", () => setActive(i));
+      list.appendChild(li);
+    });
+    setExpanded(true);
+    activeIdx = -1;
+  };
+
+  const runSearch = async (q) => {
+    const seq = ++reqSeq;
+    try {
+      const results = await fetchSearch(q);
+      if (seq !== reqSeq) return;
+      render(sortByRank(results));
+    } catch {
+      if (seq !== reqSeq) return;
+      hide();
+    }
+  };
+
+  const schedule = (delay) => {
+    clearTimeout(debounceT);
+    const q = input.value.trim();
+    if (!q) {
+      hide();
+      return;
+    }
+    debounceT = setTimeout(() => runSearch(q), delay);
+  };
+
+  // IME 変換中も `input` を通してインクリメンタルに候補を出す。ひらがな/
+  // カタカナでも Nominatim は name:ja にヒットすることがあり、確定前から
+  // 有用な候補が並ぶ。無駄打ちは debounce + クエリキャッシュで抑える。
+  input.addEventListener("input", () => schedule(SEARCH_DEBOUNCE_MS));
+
+  // 確定直後は短い遅延で再検索して体感遅延を最小化。同じクエリなら
+  // SEARCH_CACHE ヒットで fetch は発生しない。
+  input.addEventListener("compositionend", () => schedule(SEARCH_COMPOSITION_END_MS));
+
+  input.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
+    if (list.hidden || items.length === 0) {
+      if (e.key === "Enter" && input.value.trim()) {
+        e.preventDefault();
+        clearTimeout(debounceT);
+        runSearch(input.value.trim());
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive(Math.min(items.length - 1, activeIdx + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive(activeIdx <= 0 ? items.length - 1 : activeIdx - 1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      choose(activeIdx >= 0 ? activeIdx : 0);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      hide();
+      input.blur();
+    }
+  });
+
+  input.addEventListener("focus", () => {
+    if (items.length > 0) setExpanded(true);
+  });
+
+  document.addEventListener("mousedown", (e) => {
+    if (e.target === input) return;
+    if (list.contains(e.target)) return;
+    hide();
+  });
+}
+
 function readInitialView() {
   const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   const lat = Number(params.get("lat"));
@@ -1339,6 +1595,11 @@ function init() {
     );
   });
 
+
+  setupSearch((lat, lng, zoom) => {
+    // linkMaps が右ペインへ同期するので、左ペインだけ setView すれば十分。
+    mapLeft.setView([lat, lng], zoom, { animate: true });
+  });
 
   setupGpxDrop([mapLeft, mapRight], document.getElementById("btn-clear-gpx"));
 

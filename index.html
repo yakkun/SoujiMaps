@@ -27,6 +27,27 @@
       <div class="brand">
         <span class="brand-logo" aria-hidden="true">⛰⛰</span>
       </div>
+      <div class="search" role="search">
+        <input
+          type="search"
+          id="search-input"
+          class="search-input"
+          placeholder="山・地名・駅名を検索"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="山・地名・駅名を検索"
+          aria-autocomplete="list"
+          aria-controls="search-results"
+          aria-expanded="false"
+        />
+        <ul
+          class="search-results"
+          id="search-results"
+          role="listbox"
+          aria-label="検索結果"
+          hidden
+        ></ul>
+      </div>
       <div class="status" id="status" aria-live="polite">
         <span id="status-lat">—</span>,
         <span id="status-lng">—</span>

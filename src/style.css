@@ -42,7 +42,10 @@ body {
   background: linear-gradient(180deg, #1f2d3d, #17212f);
   border-bottom: 1px solid var(--border);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
-  z-index: 10;
+  /* position + z-index establish a stacking context above Leaflet's control
+   * layer (z-index: 1000) so the search dropdown isn't painted under the map. */
+  position: relative;
+  z-index: 1001;
 }
 
 .brand {
@@ -50,7 +53,135 @@ body {
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+}
+
+.search {
+  position: relative;
+  flex: 0 1 340px;
+  min-width: 180px;
   margin-right: auto;
+}
+
+.search-input {
+  width: 100%;
+  box-sizing: border-box;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--btn-bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 5px 28px 5px 28px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  outline: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2394a3b8' stroke-width='1.6' stroke-linecap='round'><circle cx='7' cy='7' r='4.5'/><line x1='10.5' y1='10.5' x2='14' y2='14'/></svg>");
+  background-repeat: no-repeat;
+  background-position: 8px center;
+  background-size: 14px 14px;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.search-input::placeholder {
+  color: var(--fg-muted);
+  opacity: 0.7;
+}
+
+.search-input:hover {
+  background-color: var(--btn-bg-hover);
+}
+
+.search-input:focus {
+  border-color: var(--accent);
+  background-color: rgba(56, 189, 248, 0.08);
+}
+
+.search-input::-webkit-search-cancel-button {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2394a3b8' stroke-width='1.6' stroke-linecap='round'><line x1='4' y1='4' x2='12' y2='12'/><line x1='12' y1='4' x2='4' y2='12'/></svg>");
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+  background-position: center;
+  cursor: pointer;
+}
+
+.search-results {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: rgba(15, 23, 42, 0.98);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  max-height: 360px;
+  overflow-y: auto;
+  z-index: 1500;
+  backdrop-filter: blur(6px);
+}
+
+.search-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.search-item:hover,
+.search-item.active {
+  background: var(--btn-bg-hover);
+}
+
+.search-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.14);
+  color: var(--accent);
+  min-width: 32px;
+  text-align: center;
+}
+
+.search-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.search-title {
+  font-size: 13px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-sub {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-empty {
+  padding: 10px 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  list-style: none;
 }
 
 .brand-logo {
@@ -330,6 +461,12 @@ body {
     height: auto;
     padding: 8px 12px;
     gap: 8px;
+  }
+
+  .search {
+    order: 2;
+    flex-basis: 100%;
+    margin-right: 0;
   }
 
   .status {
