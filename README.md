@@ -3,6 +3,8 @@
 PC / Mac / iPad などの大きな画面向けの Web アプリ。左にヤマレコ、右に OpenStreetMap の地図を並べ、
 両者を同期させながら山域の情報を比較できます。
 
+🌐 **公開 URL**: https://yakkun.github.io/SoujiMaps/
+
 サービス名は「双耳峰」にちなんでいます。
 
 ## 特徴
