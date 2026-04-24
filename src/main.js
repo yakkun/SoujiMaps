@@ -1,0 +1,497 @@
+// Souji Maps — main module
+// Left pane:  Yamareco public tile server (yamatile.com, same endpoint the
+//             yamareco.com map viewer uses).
+// Right pane: OpenStreetMap standard tiles.
+
+/* global L */
+
+const DEFAULT_VIEW = {
+  // 双耳峰として有名な鹿島槍ヶ岳付近を初期位置にする
+  lat: 36.6178,
+  lng: 137.7472,
+  zoom: 13,
+};
+
+const MIN_ZOOM = 4;
+const MAX_ZOOM = 18;
+
+const YAMARECO_ATTR =
+  '地図: <a href="https://www.yamareco.com/map/" target="_blank" rel="noreferrer">ヤマレコ 地図プラザ</a> (<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">国土地理院</a>タイル)';
+const OSM_ATTR =
+  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors';
+
+const LEFT_LAYERS = [
+  {
+    name: "ヤマレコ 標準",
+    build: () =>
+      L.tileLayer("https://{s}.yamatile.com/std/{z}/{x}/{y}.png", {
+        subdomains: ["a", "b", "c"],
+        maxZoom: MAX_ZOOM,
+        attribution: YAMARECO_ATTR,
+      }),
+  },
+];
+
+const FOOTPRINT_ATTR =
+  '足跡: <a href="https://www.yamareco.com/" target="_blank" rel="noreferrer">ヤマレコ</a>';
+
+// Yamareco「みんなの足跡」オーバーレイ。type 毎に独立したタイルレイヤーを作る。
+function buildFootprintLayer(type) {
+  const isAll = type === "all";
+  return L.tileLayer(
+    `https://yamareco.info/modules/yamareco/include/get_tileimg.php?type=${type}&z={z}&y={y}&x={x}`,
+    {
+      attribution: FOOTPRINT_ATTR,
+      opacity: isAll ? 0.5 : 0.7,
+      minNativeZoom: 5,
+      maxNativeZoom: isAll ? 15 : 16,
+      maxZoom: MAX_ZOOM,
+      zIndex: 100,
+    },
+  );
+}
+
+const FOOTPRINT_TYPES = {
+  夏期: "dot_summer",
+  冬期: "dot_winter",
+  "沢・岩": "dot_climb",
+  スキー: "dot_ski",
+  すべて: "all",
+};
+
+// ── ヤマレコの登山道 / 地点 GeoJSON オーバーレイ ──
+// rakuroute (https://www.yamareco.com/modules/yr_plan/step1_rakuroute.php)
+// で使われているエンドポイントを参考にしている。
+const YAMA_API = "https://socket.yamareco.com/v2";
+const YAMA_ATTR = '&copy; <a href="https://www.yamareco.com/" target="_blank" rel="noreferrer">Yamareco</a>';
+const YAMA_ICON_BASE =
+  "https://www.yamareco.com/modules/yr_plan/images/rakuroute";
+
+// 登山道の type 別スタイル (rakuroute.js の course_type_styles を踏襲)
+const COURSE_STYLES = {
+  "-1": { color: "#0000BB", opacity: 1, weight: 3 }, // リフト
+  0: { color: "#990066", opacity: 1, weight: 3 }, // 一般
+  1: { color: "#990066", opacity: 1, weight: 3 }, // 林道・作業道
+  2: { color: "#990066", opacity: 1, weight: 5, dashArray: "10" }, // 難路
+  3: { color: "#CC0000", opacity: 1, weight: 5, dashArray: "10,10,3,10" }, // バリエーション
+  4: { color: "#0000CC", opacity: 1, weight: 5, dashArray: "10,10,3,10" }, // 沢
+  5: { color: "#0000FF", opacity: 1, weight: 5, dashArray: "10" }, // 冬道
+};
+const courseStyle = (feature) =>
+  COURSE_STYLES[Number(feature.properties?.type)] || COURSE_STYLES[0];
+
+const makeIcon = (name) =>
+  L.icon({
+    iconUrl: `${YAMA_ICON_BASE}/${name}.png`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+    popupAnchor: [0, -11],
+  });
+
+const POINT_DESIGNS = {
+  2: { label: "山小屋(通年)", icon: makeIcon("icon_hut02") },
+  3: { label: "駐車場", icon: makeIcon("icon_parking") },
+  4: { label: "山小屋(期間営業)", icon: makeIcon("icon_hut01") },
+  5: { label: "避難小屋", icon: makeIcon("icon_hut03") },
+  6: { label: "山頂", icon: makeIcon("icon_peak") },
+  7: { label: "登山口", icon: makeIcon("icon_entrance") },
+  10: { label: "トイレ", icon: makeIcon("icon_toilet") },
+  13: { label: "危険箇所", icon: makeIcon("icon_danger") },
+  15: { label: "水場", icon: makeIcon("icon_water") },
+  16: { label: "ゲート", icon: makeIcon("icon_gate") },
+  17: { label: "バス停", icon: makeIcon("icon_busstop") },
+  18: { label: "キャンプ場/テント場", icon: makeIcon("icon_tent") },
+  19: { label: "展望", icon: makeIcon("icon_view") },
+  20: { label: "花", icon: makeIcon("icon_flower") },
+  21: { label: "ホテル・旅館", icon: makeIcon("icon_hotel") },
+  22: { label: "温泉", icon: makeIcon("icon_spa") },
+  23: { label: "小屋", icon: makeIcon("icon_hut04") },
+  98: { label: "立入禁止", icon: makeIcon("icon_prohibit") },
+  99: { label: "その他", icon: makeIcon("icon_info") },
+};
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
+}
+
+function pointToLayer(feature, latlng) {
+  const type = Number(feature.properties?.type);
+  const design = POINT_DESIGNS[type];
+  if (!design) {
+    // type=1 (経由ポイント) 等は小さな円で表示
+    return L.circleMarker(latlng, {
+      radius: 2,
+      color: "#990066",
+      weight: 1,
+      fillColor: "#990066",
+      fillOpacity: 1,
+    });
+  }
+  return L.marker(latlng, { icon: design.icon, title: feature.properties?.name });
+}
+
+function onEachPointFeature(feature, layer) {
+  const props = feature.properties || {};
+  const type = Number(props.type);
+  const design = POINT_DESIGNS[type];
+  if (!design) return;
+  const name = props.name || design.label;
+  const alt = Number(props.altitude);
+  const lines = [`<strong>${escapeHtml(name)}</strong>`];
+  if (name !== design.label) lines.push(`<small>${escapeHtml(design.label)}</small>`);
+  if (alt > 0) lines.push(`<small>${alt.toFixed(1)} m</small>`);
+  if (props.point_id) {
+    lines.push(
+      `<a href="https://www.yamareco.com/modules/yamainfo/ptinfo.php?ptid=${encodeURIComponent(props.point_id)}" target="_blank" rel="noreferrer">ヤマレコで見る ↗</a>`,
+    );
+  }
+  layer.bindPopup(lines.join("<br>"), { autoPan: false });
+}
+
+// タイル単位で GeoJSON を取得して地図に描画する TileLayer 拡張。
+// Yamareco の rakuroute.js の TileLayer.GeoJSON と同じ仕組み。
+const GeoJsonTileLayer = L.TileLayer.extend({
+  initialize(urlTemplate, options) {
+    L.TileLayer.prototype.initialize.call(this, urlTemplate, options);
+    this._geojsonLayer = L.geoJSON(null, {
+      style: options.style,
+      pointToLayer: options.pointToLayer,
+      onEachFeature: options.onEachFeature,
+    });
+    this._tileFeatures = new Map();
+  },
+  createTile(coords) {
+    const tile = L.DomUtil.create("div");
+    const key = this._tileCoordsToKey(coords);
+    this._tileFeatures.set(key, []);
+    const url = L.Util.template(this._url, {
+      x: coords.x,
+      y: coords.y,
+      z: coords.z,
+    });
+    fetch(url)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!this._tileFeatures.has(key) || !data?.features) return;
+        const added = [];
+        data.features.forEach((f) => {
+          const sub = L.geoJSON(f, {
+            style: this.options.style,
+            pointToLayer: this.options.pointToLayer,
+            onEachFeature: this.options.onEachFeature,
+          });
+          this._geojsonLayer.addLayer(sub);
+          added.push(sub);
+        });
+        this._tileFeatures.set(key, added);
+      })
+      .catch(() => {});
+    return tile;
+  },
+  onAdd(map) {
+    L.TileLayer.prototype.onAdd.call(this, map);
+    this._geojsonLayer.addTo(map);
+  },
+  onRemove(map) {
+    L.TileLayer.prototype.onRemove.call(this, map);
+    this._geojsonLayer.remove();
+    this._tileFeatures.clear();
+  },
+  _removeTile(key) {
+    const layers = this._tileFeatures.get(key);
+    if (layers) {
+      layers.forEach((l) => this._geojsonLayer.removeLayer(l));
+      this._tileFeatures.delete(key);
+    }
+    return L.TileLayer.prototype._removeTile.call(this, key);
+  },
+});
+
+function buildCourseLayer() {
+  return new GeoJsonTileLayer(
+    `${YAMA_API}/course/get_course_GeoJSON.php?x={x}&y={y}&z={z}`,
+    {
+      attribution: YAMA_ATTR,
+      minZoom: 11,
+      maxZoom: MAX_ZOOM,
+      minNativeZoom: 12,
+      maxNativeZoom: 12,
+      style: courseStyle,
+    },
+  );
+}
+
+function buildPointLayer() {
+  return new GeoJsonTileLayer(
+    `${YAMA_API}/course/get_point_GeoJSON.php?x={x}&y={y}&z={z}&all=1`,
+    {
+      attribution: YAMA_ATTR,
+      minZoom: 12,
+      maxZoom: MAX_ZOOM,
+      minNativeZoom: 12,
+      maxNativeZoom: 12,
+      pointToLayer,
+      onEachFeature: onEachPointFeature,
+    },
+  );
+}
+
+// ── OSM 側オーバーレイ ──
+function buildWaymarkedHikingLayer() {
+  return L.tileLayer(
+    "https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png",
+    {
+      maxZoom: 18,
+      attribution:
+        '登山道: <a href="https://hiking.waymarkedtrails.org/" target="_blank" rel="noreferrer">Waymarked Trails</a>',
+      opacity: 0.85,
+      zIndex: 50,
+    },
+  );
+}
+
+function buildGsiHillshadeLayer(paneName) {
+  return L.tileLayer(
+    "https://cyberjapandata.gsi.go.jp/xyz/hillshademap/{z}/{x}/{y}.png",
+    {
+      maxZoom: 16,
+      attribution:
+        '陰影起伏図: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">地理院タイル</a>',
+      opacity: 1.0,
+      pane: paneName,
+    },
+  );
+}
+
+const RIGHT_LAYERS = [
+  {
+    name: "OpenStreetMap",
+    build: () =>
+      // OSM Tile Usage Policy により Referer 必須。file:// では送られないので
+      // http(s) 経由 (localhost など) で開くこと。
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: OSM_ATTR,
+      }),
+  },
+];
+
+function readInitialView() {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const lat = Number(params.get("lat"));
+  const lng = Number(params.get("lng"));
+  const zoom = Number(params.get("z"));
+  if (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    Number.isFinite(zoom) &&
+    zoom >= MIN_ZOOM &&
+    zoom <= MAX_ZOOM
+  ) {
+    return { lat, lng, zoom, fromHash: true };
+  }
+  return { ...DEFAULT_VIEW, fromHash: false };
+}
+
+function tryMoveToCurrentLocation(map, { zoom = 14, timeoutMs = 8000 } = {}) {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const { latitude, longitude } = pos.coords;
+      map.setView([latitude, longitude], Math.max(map.getZoom(), zoom), {
+        animate: true,
+      });
+    },
+    () => {
+      // 権限拒否・取得失敗時は黙ってフォールバック座標のまま
+    },
+    { enableHighAccuracy: false, timeout: timeoutMs, maximumAge: 60_000 },
+  );
+}
+
+function writeViewToHash(lat, lng, zoom) {
+  const params = new URLSearchParams();
+  params.set("lat", lat.toFixed(5));
+  params.set("lng", lng.toFixed(5));
+  params.set("z", String(zoom));
+  const next = `#${params.toString()}`;
+  if (next !== window.location.hash) {
+    window.history.replaceState(null, "", next);
+  }
+}
+
+function createMap(elementId, layerPreset, initial) {
+  const map = L.map(elementId, {
+    center: [initial.lat, initial.lng],
+    zoom: initial.zoom,
+    minZoom: MIN_ZOOM,
+    maxZoom: MAX_ZOOM,
+    zoomControl: true,
+    worldCopyJump: true,
+    preferCanvas: true,
+  });
+  layerPreset.build().addTo(map);
+  return map;
+}
+
+// Bidirectional synchronization. A simple mutex-style guard prevents feedback
+// loops when we programmatically move the other map.
+function linkMaps(a, b, onChange) {
+  let syncing = false;
+
+  const sync = (from, to) => {
+    if (syncing) return;
+    syncing = true;
+    try {
+      const center = from.getCenter();
+      const zoom = from.getZoom();
+      to.setView(center, zoom, { animate: false, noMoveStart: true });
+      onChange(center, zoom);
+    } finally {
+      syncing = false;
+    }
+  };
+
+  a.on("move zoom", () => sync(a, b));
+  b.on("move zoom", () => sync(b, a));
+}
+
+function showToast(text) {
+  let toast = document.querySelector(".toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.className = "toast";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = text;
+  toast.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove("show"), 1800);
+}
+
+function updateStatus(center, zoom) {
+  document.getElementById("status-lat").textContent = center.lat.toFixed(5);
+  document.getElementById("status-lng").textContent = center.lng.toFixed(5);
+  document.getElementById("status-zoom").textContent = String(zoom);
+}
+
+function init() {
+  const initial = readInitialView();
+  const mapLeft = createMap("map-left", LEFT_LAYERS[0], initial);
+  const mapRight = createMap("map-right", RIGHT_LAYERS[0], initial);
+
+  const handleChange = (center, zoom) => {
+    updateStatus(center, zoom);
+    writeViewToHash(center.lat, center.lng, zoom);
+  };
+
+  linkMaps(mapLeft, mapRight, handleChange);
+  handleChange(mapLeft.getCenter(), mapLeft.getZoom());
+
+  // 共有リンクで開かれた場合 (fromHash=true) はその位置を尊重。
+  // そうでなければ起動時に現在地取得を試みる。
+  if (!initial.fromHash) {
+    tryMoveToCurrentLocation(mapLeft);
+  }
+
+  // ヤマレコ由来オーバーレイ。Leaflet 標準の L.control.layers で切替。
+  const footprintOverlays = Object.fromEntries(
+    Object.entries(FOOTPRINT_TYPES).map(([label, type]) => [
+      `みんなの足跡 (${label})`,
+      buildFootprintLayer(type),
+    ]),
+  );
+  const courseLayer = buildCourseLayer();
+  const pointLayer = buildPointLayer();
+
+  // デフォルトで有効にするオーバーレイ
+  footprintOverlays["みんなの足跡 (夏期)"].addTo(mapLeft);
+  courseLayer.addTo(mapLeft);
+  pointLayer.addTo(mapLeft);
+
+  const overlays = {
+    登山道: courseLayer,
+    "山頂・山小屋・登山口など": pointLayer,
+    ...footprintOverlays,
+  };
+  L.control
+    .layers(null, overlays, { collapsed: true, position: "topright" })
+    .addTo(mapLeft);
+
+  // OSM 側のオーバーレイ
+  // 陰影用の専用 pane を作り、mix-blend-mode: soft-light で地形を重ねる。
+  // multiply だと陰部分が強く効いて全体が暗くなるので、明度を大きく変えず
+  // コントラストだけ付ける soft-light を採用。
+  mapRight.createPane("hillshadePane");
+  const hillshadePane = mapRight.getPane("hillshadePane");
+  hillshadePane.style.zIndex = 250; // tilePane(200) の上、overlayPane(400) の下
+  hillshadePane.style.mixBlendMode = "soft-light";
+  hillshadePane.style.pointerEvents = "none";
+  hillshadePane.style.filter = "contrast(1.2)"; // soft-light は効果が柔らかいので少し強める
+
+  const waymarkedLayer = buildWaymarkedHikingLayer();
+  const hillshadeLayer = buildGsiHillshadeLayer("hillshadePane");
+  hillshadeLayer.addTo(mapRight); // 地形感は常時欲しいのでデフォルト ON
+  waymarkedLayer.addTo(mapRight); // 登山道 overlay もデフォルト ON
+
+  L.control
+    .layers(
+      null,
+      {
+        "登山道 (Waymarked Trails)": waymarkedLayer,
+        "陰影起伏図 (地理院)": hillshadeLayer,
+      },
+      { collapsed: true, position: "topright" },
+    )
+    .addTo(mapRight);
+
+  // Ensure both maps size correctly after layout settles.
+  requestAnimationFrame(() => {
+    mapLeft.invalidateSize();
+    mapRight.invalidateSize();
+  });
+
+  window.addEventListener("resize", () => {
+    mapLeft.invalidateSize();
+    mapRight.invalidateSize();
+  });
+
+  document.getElementById("btn-locate").addEventListener("click", () => {
+    if (!navigator.geolocation) {
+      showToast("この端末は位置情報に対応していません");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        mapLeft.setView([latitude, longitude], Math.max(mapLeft.getZoom(), 14));
+      },
+      (err) => {
+        showToast(`現在地を取得できません (${err.message})`);
+      },
+      { enableHighAccuracy: true, timeout: 8000 },
+    );
+  });
+
+
+  document.getElementById("btn-copy-url").addEventListener("click", async () => {
+    const url = window.location.href;
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("現在位置のURLをコピーしました");
+    } catch {
+      showToast("コピーに失敗しました");
+    }
+  });
+
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}

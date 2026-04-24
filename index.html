@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#1f2d3d" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <title>Souji Maps — 双耳マップ</title>
+    <meta
+      name="description"
+      content="ヤマレコと OpenStreetMap を左右に並べて同期表示する比較ビューア"
+    />
+
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-logo" aria-hidden="true">⛰⛰</span>
+        <div class="brand-text">
+          <h1>Souji Maps</h1>
+        </div>
+      </div>
+      <div class="status" id="status" aria-live="polite">
+        <span class="status-item">
+          <span class="label">緯度</span>
+          <span id="status-lat">—</span>
+        </span>
+        <span class="status-item">
+          <span class="label">経度</span>
+          <span id="status-lng">—</span>
+        </span>
+        <span class="status-item">
+          <span class="label">ズーム</span>
+          <span id="status-zoom">—</span>
+        </span>
+      </div>
+      <nav class="controls" aria-label="地図操作">
+        <button type="button" id="btn-locate" title="現在地に移動">
+          📍 現在地
+        </button>
+        <button type="button" id="btn-copy-url" title="現在位置の共有URLをコピー">
+          🔗 URLコピー
+        </button>
+      </nav>
+    </header>
+
+    <main class="split" id="split">
+      <section class="pane" data-side="left" aria-label="ヤマレコ 地図">
+        <div class="pane-header">
+          <span class="pane-title">ヤマレコ</span>
+          <a
+            class="pane-link"
+            href="https://www.yamareco.com/map/"
+            target="_blank"
+            rel="noreferrer noopener"
+            >yamareco.com ↗</a
+          >
+        </div>
+        <div class="map" id="map-left"></div>
+      </section>
+      <div class="splitter" role="separator" aria-orientation="vertical"></div>
+      <section class="pane" data-side="right" aria-label="OpenStreetMap 地図">
+        <div class="pane-header">
+          <span class="pane-title">OpenStreetMap</span>
+          <a
+            class="pane-link"
+            href="https://www.openstreetmap.org/"
+            target="_blank"
+            rel="noreferrer noopener"
+            >openstreetmap.org ↗</a
+          >
+        </div>
+        <div class="map" id="map-right"></div>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="./src/main.js" defer></script>
+  </body>
+</html>
