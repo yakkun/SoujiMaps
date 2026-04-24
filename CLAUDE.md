@@ -70,7 +70,7 @@ The header's `<input id="search-input">` queries the OpenStreetMap **Nominatim**
 
 ### URL hash format
 
-`#lat=<5dp>&lng=<5dp>&z=<int>`. Parsed by `readInitialView`; written by `writeViewToHash`. If no valid hash is present on load, the app falls back to `DEFAULT_VIEW` (鹿島槍ヶ岳 — the "双耳峰" the project is named after) and then attempts `navigator.geolocation.getCurrentPosition`. When the hash **is** present, geolocation is skipped so a shared link lands on the intended view.
+`#lat=<5dp>&lng=<5dp>&z=<int>`. Parsed by `readInitialView`; written by `writeViewToHash`. If no valid hash is present on load, the app falls back to `DEFAULT_VIEW` (谷川岳 — a "双耳峰" the project is named after; coordinates are the midpoint of トマノ耳 and オキノ耳) and then attempts `navigator.geolocation.getCurrentPosition`. When the hash **is** present, geolocation is skipped so a shared link lands on the intended view.
 
 ### Persisted preferences (localStorage)
 
