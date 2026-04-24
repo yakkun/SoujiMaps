@@ -17,7 +17,7 @@ There is no build step, package manager, or test suite. Serve the static files o
 
 The site is published to GitHub Pages at https://yakkun.github.io/SoujiMaps/ directly from the `main` branch — any commit to `main` goes live, so there is no staging environment.
 
-Leaflet 1.9.4 is loaded from unpkg via `<script>`/`<link>` tags in `index.html` with SRI hashes. To bump Leaflet, update both the URL and the `integrity` attribute.
+Leaflet 1.9.4 is loaded from unpkg via `<script>`/`<link>` tags in `index.html` with SRI hashes. JSZip 3.10.1 is loaded the same way — it is used only by the KMZ path in the file-drop pipeline. To bump either library, update both the URL and the `integrity` attribute.
 
 ## Architecture
 
@@ -55,6 +55,14 @@ Overlays are added per side and managed with `L.control.layers`:
 ### Hillshade blend (right pane)
 
 The GSI 陰影起伏図 is attached to a **custom Leaflet pane** (`hillshadePane`, z-index 250 between tilePane 200 and overlayPane 400) with `mix-blend-mode: soft-light` and `filter: contrast(1.2)`. `soft-light` was chosen deliberately over `multiply` because `multiply` darkens the whole map; `soft-light` boosts relief contrast without killing brightness. If you change the blend mode, re-tune `contrast()` accordingly.
+
+### Minimap
+
+`setupMinimap(master)` spawns a 180×140 fixed-position overview map in the window's bottom-left corner (hidden on ≤768 px via media query). The master is `mapLeft` — since `linkMaps` keeps both panes in sync we only need to listen to one. It reuses `LEFT_LAYERS[0].build()` (the Yamareco preset) as its basemap so the minimap reads as a miniature of the master pane, and a pink (`#ec4899`, same hue as the GPX track) `L.rectangle` shows the master's current bounds and updates on `move`/`zoom`. The minimap's own zoom tracks `master.getZoom() + MINIMAP_ZOOM_OFFSET` (default −4, clamped to 1–18) so it always reads as an overview. All pan/zoom interactions on the minimap are disabled (`dragging`/`scrollWheelZoom`/`doubleClickZoom`/`touchZoom`/`boxZoom`/`keyboard`/`tap` off) except for a single `click` handler that pans the master to the clicked latlng — giving quick-jump behaviour without accidental pans. Positioned at `z-index: 900`: above Leaflet zoom controls (1000 within each pane's stacking context, but those panes don't stack-context-compete with our fixed container) and below toasts (1000) / drop overlay (2000).
+
+### Track file drag & drop
+
+`setupFileDrop` accepts GPX, KML, KMZ, TCX, and GeoJSON via a full-window drop overlay. `parseDroppedFile` dispatches by file extension (`DROP_SUPPORTED_EXT`). Every parser — `parseGpx` / `parseKml` / `parseKmz` / `parseTcx` / `parseGeoJson` — returns the same normalized shape `{ tracks: [[[lat, lng], ...], ...], waypoints: [{ lat, lng, name }], name }`, so `buildGpxLayer` renders any format with the same pink line + white casing + halo-ed waypoints styling. GeoJSON walks `FeatureCollection` / `Feature` / bare geometry: `Point`/`MultiPoint` → waypoints, `LineString`/`MultiLineString` → tracks, `Polygon`/`MultiPolygon` → outer ring only (holes skipped). KML covers `Point`/`LineString`/`LinearRing`/`MultiGeometry`/`Polygon` plus Google Earth's `gx:Track` (coords are space-separated `"lng lat alt"`, not comma-separated like the standard `<coordinates>` list); `childByLocalName` keeps the lookup namespace-agnostic. KMZ loads via JSZip (`<script>` from unpkg with SRI), prefers `doc.kml`, and falls back to the shortest `*.kml` name in the archive. TCX extracts `<Trackpoint>` positions per `<Track>` and surfaces course metadata via `<CoursePoint>` (summit, junction, etc.) as waypoints. Loaded layers are tracked in `loaded[]` so the header's `✕ クリア` button can remove them from both panes in one call; `fitBounds` runs on the left map only and `linkMaps` syncs the right.
 
 ### Search bar (Nominatim)
 

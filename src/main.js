@@ -1070,9 +1070,11 @@ function linkMaps(a, b, onChange) {
   b.on("move zoom", () => sync(b, a));
 }
 
-// ── GPX drag & drop overlay ──
-// White casing under the pink line / halo behind waypoints for high contrast
-// against any basemap (Strava/RWGPS-style).
+// ── Track file drag & drop overlay ──
+// Accepts GPX / KML / KMZ / TCX / GeoJSON. Every parser returns the same
+// { tracks, waypoints, name } shape so buildGpxLayer can render them with
+// the same styling: a white casing under the pink line and a white halo
+// behind waypoints, for high contrast against any basemap (Strava/RWGPS-style).
 const GPX_TRACK_CASING_STYLE = {
   color: "#ffffff",
   weight: 8,
@@ -1146,6 +1148,204 @@ function parseGpx(text) {
   return { tracks, waypoints, name };
 }
 
+// ── GeoJSON / KML / KMZ / TCX parsers ──
+// All parsers normalize to the same shape as parseGpx:
+//   { tracks: [[[lat, lng], ...], ...], waypoints: [{ lat, lng, name }], name }
+// so buildGpxLayer can render any of them with the same pink/white styling.
+
+function parseGeoJson(text) {
+  let data;
+  try { data = JSON.parse(text); } catch { return null; }
+  const tracks = [];
+  const waypoints = [];
+
+  const pushLine = (coords, targetTracks = tracks) => {
+    const pts = coords
+      .map(([lng, lat]) => [Number(lat), Number(lng)])
+      .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+    if (pts.length) targetTracks.push(pts);
+  };
+
+  const walk = (geom, props) => {
+    if (!geom) return;
+    const t = geom.type;
+    if (t === "Point") {
+      const [lng, lat] = geom.coordinates || [];
+      if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+        waypoints.push({ lat: Number(lat), lng: Number(lng), name: props?.name || "" });
+      }
+    } else if (t === "MultiPoint") {
+      (geom.coordinates || []).forEach(([lng, lat]) => {
+        if (Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+          waypoints.push({ lat: Number(lat), lng: Number(lng), name: props?.name || "" });
+        }
+      });
+    } else if (t === "LineString") {
+      pushLine(geom.coordinates || []);
+    } else if (t === "MultiLineString") {
+      (geom.coordinates || []).forEach((line) => pushLine(line));
+    } else if (t === "Polygon") {
+      // Outer ring only — inner rings (holes) are visually confusing as tracks.
+      if (geom.coordinates?.[0]) pushLine(geom.coordinates[0]);
+    } else if (t === "MultiPolygon") {
+      (geom.coordinates || []).forEach((poly) => {
+        if (poly?.[0]) pushLine(poly[0]);
+      });
+    } else if (t === "GeometryCollection") {
+      (geom.geometries || []).forEach((g) => walk(g, props));
+    }
+  };
+
+  if (data?.type === "FeatureCollection") {
+    (data.features || []).forEach((f) => walk(f.geometry, f.properties));
+  } else if (data?.type === "Feature") {
+    walk(data.geometry, data.properties);
+  } else if (data?.type && data?.coordinates) {
+    walk(data, {});
+  } else {
+    return null;
+  }
+
+  return { tracks, waypoints, name: data?.name || "" };
+}
+
+// Shared helpers for KML. `childByLocalName` matches only direct children and
+// ignores namespace prefixes, which avoids picking up nested elements and
+// makes our code resilient to kml/gx: prefixes.
+function childByLocalName(el, name) {
+  return Array.from(el?.children || []).find((c) => c.localName === name);
+}
+function childrenByLocalName(el, name) {
+  return Array.from(el?.children || []).filter((c) => c.localName === name);
+}
+
+// KML <coordinates> contains whitespace-separated "lng,lat[,alt]" tuples.
+function parseKmlCoords(text) {
+  return String(text || "")
+    .trim()
+    .split(/\s+/)
+    .map((tuple) => {
+      const [lng, lat] = tuple.split(",").map(Number);
+      return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+    })
+    .filter(Boolean);
+}
+
+// <gx:Track> holds an ordered list of <gx:coord>"lng lat alt"</gx:coord>
+// siblings (interleaved with <when> timestamps). Coordinates are
+// space-separated, not comma-separated like <coordinates>.
+function parseGxTrack(el) {
+  return childrenByLocalName(el, "coord")
+    .map((c) => {
+      const [lng, lat] = String(c.textContent || "").trim().split(/\s+/).map(Number);
+      return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+    })
+    .filter(Boolean);
+}
+
+function parseKml(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length > 0) return null;
+
+  const tracks = [];
+  const waypoints = [];
+
+  const visitGeometry = (el, name) => {
+    const tag = el.localName;
+    if (tag === "Point") {
+      const pts = parseKmlCoords(childByLocalName(el, "coordinates")?.textContent);
+      if (pts[0]) waypoints.push({ lat: pts[0][0], lng: pts[0][1], name });
+    } else if (tag === "LineString" || tag === "LinearRing") {
+      const pts = parseKmlCoords(childByLocalName(el, "coordinates")?.textContent);
+      if (pts.length) tracks.push(pts);
+    } else if (tag === "Track") {
+      const pts = parseGxTrack(el);
+      if (pts.length) tracks.push(pts);
+    } else if (tag === "MultiTrack" || tag === "MultiGeometry" || tag === "Polygon") {
+      Array.from(el.children).forEach((child) => visitGeometry(child, name));
+    }
+  };
+
+  Array.from(doc.getElementsByTagName("Placemark")).forEach((pm) => {
+    const pmName = childByLocalName(pm, "name")?.textContent?.trim() || "";
+    Array.from(pm.children).forEach((child) => visitGeometry(child, pmName));
+  });
+
+  const docEl = doc.getElementsByTagName("Document")[0] || doc.getElementsByTagName("Folder")[0];
+  const docName = childByLocalName(docEl, "name")?.textContent?.trim() || "";
+
+  return { tracks, waypoints, name: docName };
+}
+
+// KMZ is a zip archive whose main entry is usually "doc.kml". JSZip is loaded
+// via <script> in index.html; if unavailable we bail with a null return so the
+// caller can surface a clear error.
+async function parseKmz(arrayBuffer) {
+  if (typeof JSZip === "undefined") return null;
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  let entry = zip.file("doc.kml");
+  if (!entry) {
+    const kmlName = Object.keys(zip.files)
+      .filter((n) => /\.kml$/i.test(n))
+      .sort((a, b) => a.length - b.length)[0];
+    if (kmlName) entry = zip.file(kmlName);
+  }
+  if (!entry) return null;
+  return parseKml(await entry.async("string"));
+}
+
+// TCX is Garmin's XML activity/course format. Each <Track> holds ordered
+// <Trackpoint><Position><LatitudeDegrees/><LongitudeDegrees/></Position>...
+// Course files additionally expose <CoursePoint> named waypoints (summit,
+// junction, etc.) which we surface like GPX <wpt>.
+function parseTcx(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length > 0) return null;
+
+  const tracks = [];
+  Array.from(doc.getElementsByTagName("Track")).forEach((trk) => {
+    const pts = [];
+    Array.from(trk.getElementsByTagName("Trackpoint")).forEach((tp) => {
+      const pos = tp.getElementsByTagName("Position")[0];
+      if (!pos) return;
+      const lat = Number(pos.getElementsByTagName("LatitudeDegrees")[0]?.textContent);
+      const lng = Number(pos.getElementsByTagName("LongitudeDegrees")[0]?.textContent);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) pts.push([lat, lng]);
+    });
+    if (pts.length) tracks.push(pts);
+  });
+
+  const waypoints = [];
+  Array.from(doc.getElementsByTagName("CoursePoint")).forEach((cp) => {
+    const pos = cp.getElementsByTagName("Position")[0];
+    if (!pos) return;
+    const lat = Number(pos.getElementsByTagName("LatitudeDegrees")[0]?.textContent);
+    const lng = Number(pos.getElementsByTagName("LongitudeDegrees")[0]?.textContent);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const name = cp.getElementsByTagName("Name")[0]?.textContent?.trim() || "";
+    waypoints.push({ lat, lng, name });
+  });
+
+  const courseName = doc.getElementsByTagName("Course")[0]
+    ?.getElementsByTagName("Name")[0]?.textContent?.trim();
+  const activityId = doc.getElementsByTagName("Activity")[0]
+    ?.getElementsByTagName("Id")[0]?.textContent?.trim();
+  return { tracks, waypoints, name: courseName || activityId || "" };
+}
+
+const DROP_SUPPORTED_EXT = /\.(gpx|kml|kmz|tcx|geojson|json)$/i;
+
+async function parseDroppedFile(file) {
+  const ext = file.name.toLowerCase().match(/\.([^.]+)$/)?.[1] || "";
+  if (ext === "kmz") return parseKmz(await file.arrayBuffer());
+  const text = await file.text();
+  if (ext === "gpx") return parseGpx(text);
+  if (ext === "kml") return parseKml(text);
+  if (ext === "tcx") return parseTcx(text);
+  if (ext === "geojson" || ext === "json") return parseGeoJson(text);
+  return null;
+}
+
 function buildGpxLayer(gpx) {
   const layer = L.featureGroup();
   const popupHtml = gpx.name ? `<strong>${escapeHtml(gpx.name)}</strong>` : "";
@@ -1167,11 +1367,11 @@ function buildGpxLayer(gpx) {
   return layer;
 }
 
-function setupGpxDrop(maps, clearButton) {
+function setupFileDrop(maps, clearButton) {
   const overlay = document.createElement("div");
   overlay.className = "drop-overlay";
   overlay.innerHTML =
-    '<div class="drop-overlay-text">GPX をドロップして表示</div>';
+    '<div class="drop-overlay-text">GPX / KML / KMZ / TCX / GeoJSON をドロップ</div>';
   document.body.appendChild(overlay);
 
   // Track [{leftLayer, rightLayer}] so we can remove cleanly later.
@@ -1210,10 +1410,10 @@ function setupGpxDrop(maps, clearButton) {
     showOverlay(false);
 
     const files = Array.from(e.dataTransfer.files).filter((f) =>
-      /\.gpx$/i.test(f.name),
+      DROP_SUPPORTED_EXT.test(f.name),
     );
     if (files.length === 0) {
-      showToast("GPX ファイルではありません");
+      showToast("対応形式ではありません (GPX / KML / KMZ / TCX / GeoJSON)");
       return;
     }
 
@@ -1221,14 +1421,13 @@ function setupGpxDrop(maps, clearButton) {
     let lastName = "";
     for (const file of files) {
       try {
-        const text = await file.text();
-        const gpx = parseGpx(text);
-        if (!gpx || (gpx.tracks.length === 0 && gpx.waypoints.length === 0)) {
+        const parsed = await parseDroppedFile(file);
+        if (!parsed || (parsed.tracks.length === 0 && parsed.waypoints.length === 0)) {
           showToast(`${file.name}: ルート/地点が見つかりません`);
           continue;
         }
         const layers = maps.map((m) => {
-          const layer = buildGpxLayer(gpx);
+          const layer = buildGpxLayer(parsed);
           layer.addTo(m);
           return layer;
         });
@@ -1237,7 +1436,7 @@ function setupGpxDrop(maps, clearButton) {
         if (bounds.isValid()) {
           totalBounds = totalBounds ? totalBounds.extend(bounds) : bounds;
         }
-        lastName = gpx.name || file.name;
+        lastName = parsed.name || file.name;
       } catch (err) {
         showToast(`${file.name}: 読み込み失敗 (${err.message})`);
       }
@@ -1257,7 +1456,7 @@ function setupGpxDrop(maps, clearButton) {
     });
     loaded.length = 0;
     updateClearButton();
-    showToast("GPX をクリアしました");
+    showToast("トラックをクリアしました");
   });
 }
 
@@ -1342,6 +1541,69 @@ function makeSplitterDraggable(splitEl, splitterEl, onResize) {
   const onMqChange = () => reset();
   if (verticalMQ.addEventListener) verticalMQ.addEventListener("change", onMqChange);
   else verticalMQ.addListener(onMqChange);
+}
+
+// ── Minimap ──
+// Small overview map fixed to the bottom-left of the window. `master` drives
+// the view — the other pane follows via linkMaps so we only listen on one.
+// The minimap itself is a dumb follower: drag/zoom interactions are off,
+// a click pans the master to the clicked spot so it doubles as a quick jump.
+const MINIMAP_ZOOM_OFFSET = -4;
+
+function setupMinimap(master) {
+  const container = document.createElement("div");
+  container.className = "minimap";
+  const mapEl = document.createElement("div");
+  mapEl.className = "minimap-map";
+  container.appendChild(mapEl);
+  document.body.appendChild(container);
+
+  const mini = L.map(mapEl, {
+    zoomControl: false,
+    dragging: false,
+    scrollWheelZoom: false,
+    doubleClickZoom: false,
+    touchZoom: false,
+    boxZoom: false,
+    keyboard: false,
+    tap: false,
+    // Attribution is already shown on the master pane using the same tile
+    // source, so duplicating it here would just eat pixels.
+    attributionControl: false,
+    zoomSnap: 1,
+  });
+
+  // Reuse the left pane's Yamareco tile preset so the minimap reads as a
+  // miniature of the master pane, and the map style stays consistent if the
+  // preset is later swapped out in one place.
+  LEFT_LAYERS[0].build().addTo(mini);
+
+  // Viewport indicator. Hot pink matches the GPX track styling for a
+  // consistent "this is what you're looking at" cue.
+  const rect = L.rectangle(master.getBounds(), {
+    color: "#ec4899",
+    weight: 2,
+    fillOpacity: 0.08,
+    interactive: false,
+  }).addTo(mini);
+
+  const clampZoom = (z) => Math.max(1, Math.min(18, z));
+
+  const sync = () => {
+    const miniZ = clampZoom(master.getZoom() + MINIMAP_ZOOM_OFFSET);
+    mini.setView(master.getCenter(), miniZ, { animate: false });
+    rect.setBounds(master.getBounds());
+  };
+
+  master.on("move zoom", sync);
+  sync();
+
+  mini.on("click", (e) => {
+    master.setView(e.latlng, master.getZoom(), { animate: true });
+  });
+
+  // Re-render when the container becomes visible (e.g., after CSS breakpoint).
+  window.addEventListener("resize", () => mini.invalidateSize());
 }
 
 function showToast(text) {
@@ -1601,7 +1863,9 @@ function init() {
     mapLeft.setView([lat, lng], zoom, { animate: true });
   });
 
-  setupGpxDrop([mapLeft, mapRight], document.getElementById("btn-clear-gpx"));
+  setupFileDrop([mapLeft, mapRight], document.getElementById("btn-clear-gpx"));
+
+  setupMinimap(mapLeft);
 
   document.getElementById("btn-copy-url").addEventListener("click", async () => {
     const url = window.location.href;
