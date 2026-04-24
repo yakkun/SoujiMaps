@@ -21,7 +21,7 @@ Leaflet 1.9.4 is loaded from unpkg via `<script>`/`<link>` tags in `index.html` 
 
 ## Architecture
 
-Side-by-side map viewer: left pane = Yamareco tiles (a 国土地理院-based stack the Japanese hiking site uses), right pane = OpenStreetMap standard tiles. All logic lives in one file, `src/main.js`, driven by `index.html` + `src/style.css`.
+Side-by-side map viewer: left pane = Yamareco tiles (a 国土地理院-based stack the Japanese hiking site uses), right pane = user-selectable basemap (OpenStreetMap by default). All logic lives in one file, `src/main.js`, driven by `index.html` + `src/style.css`.
 
 ### Map synchronization (`linkMaps`)
 
@@ -29,12 +29,22 @@ Both Leaflet maps share a single `syncing` boolean mutex. `move`/`zoom` events o
 
 ### Tile layer presets
 
-`LEFT_LAYERS` and `RIGHT_LAYERS` are arrays of `{ name, build }` objects at the top of `main.js`. Only index `0` is currently used, but the shape is preserved so alternate basemaps can be slotted in later. This is the place to edit when swapping tile sources.
+`LEFT_LAYERS` and `RIGHT_LAYERS` are arrays at the top of `main.js`. Left entries are `{ name, build }`; right entries also carry `linkHref` / `linkText` so the right pane header's external link + `aria-label` can be updated whenever the user switches basemaps, plus a `group` label that drives `<optgroup>` rendering in the header `<select>` and an optional `requires` field that gates API-key-only providers. `LEFT_LAYERS` currently uses only index `0`; `RIGHT_LAYERS` defines up to 32 presets across 6 groups, any of which may be hidden if their API key is missing: **標準地図** (OSM, OSM Humanitarian, CARTO Voyager, Esri ストリート), **淡色・ダーク** (CARTO Positron/Dark Matter, Esri グレーキャンバス, Stadia Alidade Smooth Dark *(key)*, Stamen Toner *(key)*), **Google Maps** (道路/地形/航空写真/ハイブリッド), **地理院 (日本)** (標準/淡色/白地図/色別標高図), **地形・アウトドア** (OpenTopoMap, Esri 地形図, Esri ナショジオ, CyclOSM, Esri 海洋, Stadia Outdoors *(key)*, Stamen Terrain *(key)*, Thunderforest Outdoors/Landscape *(key)*, MapTiler Outdoor/Winter *(key)*, Mapbox Outdoors *(key)*), and **衛星・空中写真** (地理院 空中写真, Esri 衛星写真, Mapbox 衛星ストリート *(key)*). `(key)` marks entries gated by `requires`.
+
+**Ordering constraint**: `populateRightBasemapSelect` emits an `<optgroup>` whenever `preset.group` changes between consecutive entries — so presets sharing a group must stay contiguous in `RIGHT_LAYERS`, otherwise the same label would render twice. Group order in the menu is simply the order groups first appear in the array.
+
+**API keys & `src/config.js`**: optional basemap providers (Thunderforest, MapTiler, Mapbox, Stadia/Stamen) read their keys from `window.SOUJI_MAPS_KEYS`, populated by `src/config.js` — loaded via a non-deferred `<script>` tag in `index.html` *before* `main.js` so the global is set by the time presets are built. Runtime overrides from `localStorage["souji-maps-keys"]` (JSON) win over the file so users can keep keys out of git. Each keyed preset declares `requires: KEYS.<provider>` (truthy string / boolean); `isPresetEnabled` + `buildRightBasemaps()` drop them when falsy, so the dropdown stays clean. Stadia uses domain-authenticated access — no `api_key=` in the URL, just flip `stadia.enabled: true` after registering the site at `client.stadiamaps.com`. The other three embed `apikey=` / `key=` / `access_token=` in the URL; if committing to a public repo, lock the key by HTTP Referer in the provider dashboard.
+
+`buildGoogleTileLayer(lyrs)` (`m`=道路, `s`=航空, `y`=ハイブリッド, `p`=地形) and `buildEsriTileLayer(service, { maxNativeZoom, source })` are shared factories — service names come from the `server.arcgisonline.com/ArcGIS/rest/services/<service>/MapServer` path, and each Esri service has its own attribution "source" string plus (for some) a lower `maxNativeZoom` than Leaflet's default.
+
+**Google tiles caveat**: the Google entries hit the internal `mt{0-3}.google.com/vt/` endpoint, which is *not* the officially sanctioned embed path — Google's Maps Platform ToS expects the Maps JavaScript API. They're included because this is a personal/non-commercial viewer; remove them if that changes.
+
+The right pane's basemap is switched **via a `<select class="pane-title-select">` inside the pane header** (the `.pane-title` itself is the `<select>`), not via `L.control.layers`. `buildRightBasemaps()` returns `[{ preset, layer }, ...]`; `populateRightBasemapSelect` fills the `<select>` with an `<option>` per preset. The `change` handler removes the active basemap layer and adds the newly selected one, then calls `applyRightPaneHeader` to update link/aria. Overlay layers (Waymarked Trails, hillshade) are unaffected because they are separate layers registered with `L.control.layers`. Because the default basemap is added by the init sequence (not `createMap`), `createMap` is called with `{ addDefault: false }` for the right pane to avoid double-adding.
 
 Overlays are added per side and managed with `L.control.layers`:
 
 - **Left (Yamareco)**: みんなの足跡 (5 type variants: 夏期/冬期/沢・岩/スキー/すべて), 登山道 (GeoJSON), 山頂・山小屋・登山口など (GeoJSON). Default ON: 夏期 足跡 + 登山道 + ポイント.
-- **Right (OSM)**: Waymarked Trails (hiking), 地理院陰影起伏図. Both ON by default.
+- **Right**: Waymarked Trails (hiking), 地理院陰影起伏図. Both ON by default. These overlays persist across basemap switches because they are registered with the control as overlays, not base layers.
 
 ### `GeoJsonTileLayer` (custom Leaflet extension)
 

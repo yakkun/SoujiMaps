@@ -61,7 +61,11 @@
       <div class="splitter" role="separator" aria-orientation="vertical"></div>
       <section class="pane" data-side="right" aria-label="OpenStreetMap 地図">
         <div class="pane-header">
-          <span class="pane-title">OpenStreetMap</span>
+          <select
+            class="pane-title pane-title-select"
+            id="right-basemap-select"
+            aria-label="右側の地図を切り替え"
+          ></select>
           <a
             class="pane-link"
             href="https://www.openstreetmap.org/"
@@ -79,6 +83,7 @@
       integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
       crossorigin=""
     ></script>
+    <script src="./src/config.js"></script>
     <script src="./src/main.js" defer></script>
   </body>
 </html>

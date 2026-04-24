@@ -267,9 +267,126 @@ function buildGsiHillshadeLayer(paneName) {
   );
 }
 
+const GSI_ATTR =
+  '地図: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">国土地理院タイル</a>';
+
+const CARTO_ATTR =
+  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>';
+const OSM_HOT_ATTR =
+  '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors | 地図: <a href="https://www.hotosm.org/" target="_blank" rel="noreferrer">Humanitarian OSM Team</a>, hosted by <a href="https://www.openstreetmap.fr/" target="_blank" rel="noreferrer">OSM France</a>';
+const GOOGLE_ATTR =
+  'Map data &copy; <a href="https://www.google.com/intl/ja/help/terms_maps/" target="_blank" rel="noreferrer">Google</a>';
+
+// Google Maps の内部タイルエンドポイント。公式の Maps JavaScript API 経由では
+// ないため利用規約の観点ではグレーだが、個人プロジェクトで広く使われるので
+// option として提供する。`lyrs` で種別を切替: m=道路, s=航空, y=ハイブリッド, p=地形
+const buildGoogleTileLayer = (lyrs) =>
+  L.tileLayer(
+    `https://mt{s}.google.com/vt/lyrs=${lyrs}&hl=ja&x={x}&y={y}&z={z}`,
+    {
+      subdomains: ["0", "1", "2", "3"],
+      maxZoom: 20,
+      attribution: GOOGLE_ATTR,
+    },
+  );
+
+// ArcGIS Online の公開タイルサービス。service 名だけ差し替えれば使い回せる。
+const buildEsriTileLayer = (service, { maxNativeZoom = 19, source = "" } = {}) =>
+  L.tileLayer(
+    `https://server.arcgisonline.com/ArcGIS/rest/services/${service}/MapServer/tile/{z}/{y}/{x}`,
+    {
+      maxZoom: 19,
+      maxNativeZoom,
+      attribution: `Tiles &copy; <a href="https://www.esri.com/" target="_blank" rel="noreferrer">Esri</a>${source ? ` — ${source}` : ""}`,
+    },
+  );
+
+// ── API キーが必要なプロバイダ ──
+// `src/config.js` の値は window.SOUJI_MAPS_KEYS から読む。localStorage に
+// "souji-maps-keys" が入っていればそちらを優先 (リポジトリに鍵を置きたく
+// ないユーザ向け)。
+const KEYS_DEFAULT = {
+  thunderforest: "",
+  maptiler: "",
+  mapbox: "",
+  stadia: { enabled: false },
+};
+function readApiKeys() {
+  const fromFile = window.SOUJI_MAPS_KEYS || {};
+  let fromStorage = {};
+  try {
+    const raw = localStorage.getItem("souji-maps-keys");
+    if (raw) fromStorage = JSON.parse(raw) || {};
+  } catch {
+    // localStorage が使えない環境 (プライベートモード等) は無視
+  }
+  const stadia = {
+    ...KEYS_DEFAULT.stadia,
+    ...(fromFile.stadia || {}),
+    ...(fromStorage.stadia || {}),
+  };
+  return {
+    thunderforest: fromStorage.thunderforest || fromFile.thunderforest || "",
+    maptiler: fromStorage.maptiler || fromFile.maptiler || "",
+    mapbox: fromStorage.mapbox || fromFile.mapbox || "",
+    stadia,
+  };
+}
+const KEYS = readApiKeys();
+
+const STADIA_ATTR =
+  '&copy; <a href="https://stadiamaps.com/" target="_blank" rel="noreferrer">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors';
+const STAMEN_ATTR =
+  '&copy; <a href="https://stamen.com/" target="_blank" rel="noreferrer">Stamen Design</a> &copy; <a href="https://stadiamaps.com/" target="_blank" rel="noreferrer">Stadia Maps</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors';
+const THUNDERFOREST_ATTR =
+  'Maps &copy; <a href="https://www.thunderforest.com/" target="_blank" rel="noreferrer">Thunderforest</a>, Data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors';
+const MAPTILER_ATTR =
+  '&copy; <a href="https://www.maptiler.com/copyright/" target="_blank" rel="noreferrer">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors';
+const MAPBOX_ATTR =
+  '&copy; <a href="https://www.mapbox.com/about/maps/" target="_blank" rel="noreferrer">Mapbox</a> &copy; <a href="https://www.openstreetmap.org/about/" target="_blank" rel="noreferrer">OpenStreetMap</a>';
+
+// Stadia はドメイン認可方式なので URL に鍵を載せない。Stamen 系スタイルは
+// attribution に Stamen Design を含める必要がある。
+const buildStadiaTileLayer = (
+  style,
+  { ext = "png", maxZoom = 20, attr = STADIA_ATTR } = {},
+) =>
+  L.tileLayer(
+    `https://tiles.stadiamaps.com/tiles/${style}/{z}/{x}/{y}.${ext}`,
+    { maxZoom, attribution: attr },
+  );
+
+const buildThunderforestTileLayer = (style) =>
+  L.tileLayer(
+    `https://{s}.tile.thunderforest.com/${style}/{z}/{x}/{y}.png?apikey=${encodeURIComponent(KEYS.thunderforest)}`,
+    {
+      subdomains: ["a", "b", "c"],
+      maxZoom: 22,
+      attribution: THUNDERFOREST_ATTR,
+    },
+  );
+
+const buildMapTilerTileLayer = (style, ext = "png") =>
+  L.tileLayer(
+    `https://api.maptiler.com/maps/${style}/{z}/{x}/{y}.${ext}?key=${encodeURIComponent(KEYS.maptiler)}`,
+    { maxZoom: 22, attribution: MAPTILER_ATTR },
+  );
+
+const buildMapboxTileLayer = (style) =>
+  L.tileLayer(
+    `https://api.mapbox.com/styles/v1/mapbox/${style}/tiles/256/{z}/{x}/{y}?access_token=${encodeURIComponent(KEYS.mapbox)}`,
+    { maxZoom: 22, attribution: MAPBOX_ATTR },
+  );
+
+// Grouped so the <select> can render <optgroup>s. Entries are ordered by group
+// and the group order here is the order the <optgroup>s appear in the menu.
 const RIGHT_LAYERS = [
+  // ── 標準地図 ──
   {
+    group: "標準地図",
     name: "OpenStreetMap",
+    linkHref: "https://www.openstreetmap.org/",
+    linkText: "openstreetmap.org ↗",
     build: () =>
       // OSM Tile Usage Policy により Referer 必須。file:// では送られないので
       // http(s) 経由 (localhost など) で開くこと。
@@ -277,6 +394,343 @@ const RIGHT_LAYERS = [
         maxZoom: 19,
         attribution: OSM_ATTR,
       }),
+  },
+  {
+    group: "標準地図",
+    name: "OSM Humanitarian",
+    linkHref: "https://www.hotosm.org/",
+    linkText: "hotosm.org ↗",
+    build: () =>
+      L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
+        subdomains: ["a", "b", "c"],
+        maxZoom: 19,
+        attribution: OSM_HOT_ATTR,
+      }),
+  },
+  {
+    group: "標準地図",
+    name: "CARTO Voyager",
+    linkHref: "https://carto.com/",
+    linkText: "carto.com ↗",
+    build: () =>
+      L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        {
+          subdomains: ["a", "b", "c", "d"],
+          maxZoom: 20,
+          attribution: CARTO_ATTR,
+        },
+      ),
+  },
+  {
+    group: "標準地図",
+    name: "Esri ストリート",
+    linkHref: "https://www.esri.com/",
+    linkText: "esri.com ↗",
+    build: () =>
+      buildEsriTileLayer("World_Street_Map", {
+        source:
+          "Esri, HERE, Garmin, USGS, Intermap, INCREMENT P, NRCan, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom, OpenStreetMap contributors, and the GIS User Community",
+      }),
+  },
+
+  // ── 淡色・ダーク ──
+  {
+    group: "淡色・ダーク",
+    name: "CARTO Positron",
+    linkHref: "https://carto.com/",
+    linkText: "carto.com ↗",
+    build: () =>
+      L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+        {
+          subdomains: ["a", "b", "c", "d"],
+          maxZoom: 20,
+          attribution: CARTO_ATTR,
+        },
+      ),
+  },
+  {
+    group: "淡色・ダーク",
+    name: "CARTO Dark Matter",
+    linkHref: "https://carto.com/",
+    linkText: "carto.com ↗",
+    build: () =>
+      L.tileLayer(
+        "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        {
+          subdomains: ["a", "b", "c", "d"],
+          maxZoom: 20,
+          attribution: CARTO_ATTR,
+        },
+      ),
+  },
+  {
+    group: "淡色・ダーク",
+    name: "Esri グレーキャンバス",
+    linkHref: "https://www.esri.com/",
+    linkText: "esri.com ↗",
+    build: () =>
+      buildEsriTileLayer("Canvas/World_Light_Gray_Base", {
+        maxNativeZoom: 16,
+        source:
+          "Esri, HERE, Garmin, FAO, NOAA, USGS, OpenStreetMap contributors, and the GIS User Community",
+      }),
+  },
+  {
+    group: "淡色・ダーク",
+    name: "Stadia Alidade Smooth Dark",
+    linkHref: "https://stadiamaps.com/",
+    linkText: "stadiamaps.com ↗",
+    requires: KEYS.stadia.enabled,
+    build: () => buildStadiaTileLayer("alidade_smooth_dark"),
+  },
+  {
+    group: "淡色・ダーク",
+    name: "Stamen Toner",
+    linkHref: "https://stadiamaps.com/",
+    linkText: "stadiamaps.com ↗",
+    requires: KEYS.stadia.enabled,
+    build: () => buildStadiaTileLayer("stamen_toner", { attr: STAMEN_ATTR }),
+  },
+
+  // ── Google Maps ──
+  {
+    group: "Google Maps",
+    name: "Google 道路",
+    linkHref: "https://www.google.com/maps",
+    linkText: "google.com/maps ↗",
+    build: () => buildGoogleTileLayer("m"),
+  },
+  {
+    group: "Google Maps",
+    name: "Google 地形",
+    linkHref: "https://www.google.com/maps",
+    linkText: "google.com/maps ↗",
+    build: () => buildGoogleTileLayer("p"),
+  },
+  {
+    group: "Google Maps",
+    name: "Google 航空写真",
+    linkHref: "https://www.google.com/maps",
+    linkText: "google.com/maps ↗",
+    build: () => buildGoogleTileLayer("s"),
+  },
+  {
+    group: "Google Maps",
+    name: "Google ハイブリッド",
+    linkHref: "https://www.google.com/maps",
+    linkText: "google.com/maps ↗",
+    build: () => buildGoogleTileLayer("y"),
+  },
+
+  // ── 地理院 (日本) ──
+  {
+    group: "地理院 (日本)",
+    name: "地理院 標準地図",
+    linkHref: "https://maps.gsi.go.jp/",
+    linkText: "maps.gsi.go.jp ↗",
+    build: () =>
+      L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png", {
+        maxZoom: 18,
+        attribution: GSI_ATTR,
+      }),
+  },
+  {
+    group: "地理院 (日本)",
+    name: "地理院 淡色地図",
+    linkHref: "https://maps.gsi.go.jp/",
+    linkText: "maps.gsi.go.jp ↗",
+    build: () =>
+      L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", {
+        maxZoom: 18,
+        attribution: GSI_ATTR,
+      }),
+  },
+  {
+    group: "地理院 (日本)",
+    name: "地理院 白地図",
+    linkHref: "https://maps.gsi.go.jp/",
+    linkText: "maps.gsi.go.jp ↗",
+    build: () =>
+      L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/blank/{z}/{x}/{y}.png", {
+        maxZoom: 14,
+        attribution: GSI_ATTR,
+      }),
+  },
+  {
+    group: "地理院 (日本)",
+    name: "地理院 色別標高図",
+    linkHref: "https://maps.gsi.go.jp/",
+    linkText: "maps.gsi.go.jp ↗",
+    build: () =>
+      L.tileLayer(
+        "https://cyberjapandata.gsi.go.jp/xyz/relief/{z}/{x}/{y}.png",
+        {
+          maxZoom: 15,
+          attribution:
+            '色別標高図: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">国土地理院</a>',
+        },
+      ),
+  },
+
+  // ── 地形・アウトドア ──
+  {
+    group: "地形・アウトドア",
+    name: "OpenTopoMap",
+    linkHref: "https://opentopomap.org/",
+    linkText: "opentopomap.org ↗",
+    build: () =>
+      L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+        subdomains: ["a", "b", "c"],
+        maxZoom: 17,
+        attribution:
+          '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors | 地図: <a href="https://opentopomap.org/" target="_blank" rel="noreferrer">OpenTopoMap</a> (CC-BY-SA)',
+      }),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "Esri 地形図",
+    linkHref: "https://www.esri.com/",
+    linkText: "esri.com ↗",
+    build: () =>
+      buildEsriTileLayer("World_Topo_Map", {
+        source:
+          "Esri, HERE, Garmin, USGS, Intermap, INCREMENT P, NRCan, Esri Japan, METI, Esri China (Hong Kong), OpenStreetMap contributors, and the GIS User Community",
+      }),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "Esri ナショジオ",
+    linkHref: "https://www.esri.com/",
+    linkText: "esri.com ↗",
+    build: () =>
+      buildEsriTileLayer("NatGeo_World_Map", {
+        maxNativeZoom: 16,
+        source:
+          "National Geographic, Esri, DeLorme, NAVTEQ, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA, iPC",
+      }),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "CyclOSM",
+    linkHref: "https://www.cyclosm.org/",
+    linkText: "cyclosm.org ↗",
+    build: () =>
+      L.tileLayer(
+        "https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png",
+        {
+          subdomains: ["a", "b", "c"],
+          maxZoom: 20,
+          attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors | 地図: <a href="https://www.cyclosm.org/" target="_blank" rel="noreferrer">CyclOSM</a>',
+        },
+      ),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "Esri 海洋",
+    linkHref: "https://www.esri.com/",
+    linkText: "esri.com ↗",
+    build: () =>
+      buildEsriTileLayer("Ocean/World_Ocean_Base", {
+        maxNativeZoom: 13,
+        source:
+          "Esri, GEBCO, NOAA, National Geographic, Garmin, HERE, Geonames.org, and other contributors",
+      }),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "Stadia Outdoors",
+    linkHref: "https://stadiamaps.com/",
+    linkText: "stadiamaps.com ↗",
+    requires: KEYS.stadia.enabled,
+    build: () => buildStadiaTileLayer("outdoors"),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "Stamen Terrain",
+    linkHref: "https://stadiamaps.com/",
+    linkText: "stadiamaps.com ↗",
+    requires: KEYS.stadia.enabled,
+    build: () =>
+      buildStadiaTileLayer("stamen_terrain", { maxZoom: 18, attr: STAMEN_ATTR }),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "Thunderforest Outdoors",
+    linkHref: "https://www.thunderforest.com/",
+    linkText: "thunderforest.com ↗",
+    requires: KEYS.thunderforest,
+    build: () => buildThunderforestTileLayer("outdoors"),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "Thunderforest Landscape",
+    linkHref: "https://www.thunderforest.com/",
+    linkText: "thunderforest.com ↗",
+    requires: KEYS.thunderforest,
+    build: () => buildThunderforestTileLayer("landscape"),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "MapTiler Outdoor",
+    linkHref: "https://www.maptiler.com/",
+    linkText: "maptiler.com ↗",
+    requires: KEYS.maptiler,
+    build: () => buildMapTilerTileLayer("outdoor-v2"),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "MapTiler Winter",
+    linkHref: "https://www.maptiler.com/",
+    linkText: "maptiler.com ↗",
+    requires: KEYS.maptiler,
+    build: () => buildMapTilerTileLayer("winter-v2"),
+  },
+  {
+    group: "地形・アウトドア",
+    name: "Mapbox Outdoors",
+    linkHref: "https://www.mapbox.com/",
+    linkText: "mapbox.com ↗",
+    requires: KEYS.mapbox,
+    build: () => buildMapboxTileLayer("outdoors-v12"),
+  },
+
+  // ── 衛星・空中写真 ──
+  {
+    group: "衛星・空中写真",
+    name: "地理院 空中写真",
+    linkHref: "https://maps.gsi.go.jp/",
+    linkText: "maps.gsi.go.jp ↗",
+    build: () =>
+      L.tileLayer(
+        "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg",
+        {
+          maxZoom: 18,
+          attribution:
+            '空中写真: <a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">国土地理院</a>',
+        },
+      ),
+  },
+  {
+    group: "衛星・空中写真",
+    name: "Esri 衛星写真",
+    linkHref: "https://www.esri.com/",
+    linkText: "esri.com ↗",
+    build: () =>
+      buildEsriTileLayer("World_Imagery", {
+        source:
+          "Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+      }),
+  },
+  {
+    group: "衛星・空中写真",
+    name: "Mapbox 衛星ストリート",
+    linkHref: "https://www.mapbox.com/",
+    linkText: "mapbox.com ↗",
+    requires: KEYS.mapbox,
+    build: () => buildMapboxTileLayer("satellite-streets-v12"),
   },
 ];
 
@@ -324,7 +778,7 @@ function writeViewToHash(lat, lng, zoom) {
   }
 }
 
-function createMap(elementId, layerPreset, initial) {
+function createMap(elementId, layerPreset, initial, { addDefault = true } = {}) {
   const map = L.map(elementId, {
     center: [initial.lat, initial.lng],
     zoom: initial.zoom,
@@ -334,7 +788,7 @@ function createMap(elementId, layerPreset, initial) {
     worldCopyJump: true,
     preferCanvas: true,
   });
-  layerPreset.build().addTo(map);
+  if (addDefault) layerPreset.build().addTo(map);
   return map;
 }
 
@@ -652,10 +1106,69 @@ function updateStatus(center) {
   document.getElementById("status-lng").textContent = center.lng.toFixed(5);
 }
 
+// Presets may declare a `requires` field (API key / feature flag). When it's
+// present, the preset is included only if the value is truthy — lets the
+// dropdown hide providers the user hasn't configured.
+const isPresetEnabled = (preset) =>
+  !("requires" in preset) || Boolean(preset.requires);
+
+// Build every active right-side basemap up front. Keeping all layer instances
+// around means the <select>-based switcher can swap them without rebuilding.
+function buildRightBasemaps() {
+  return RIGHT_LAYERS.filter(isPresetEnabled).map((preset) => ({
+    preset,
+    layer: preset.build(),
+  }));
+}
+
+// Update the right pane header's external link and aria-label to match the
+// active basemap. The <select> itself is the title, so we don't write text.
+function applyRightPaneHeader(preset) {
+  const section = document.querySelector('section[data-side="right"]');
+  if (!section) return;
+  section.setAttribute("aria-label", `${preset.name} 地図`);
+  const linkEl = section.querySelector(".pane-link");
+  if (linkEl) {
+    linkEl.href = preset.linkHref;
+    linkEl.textContent = preset.linkText;
+  }
+}
+
+// Populate the <select> with one <option> per preset, wrapping each run of
+// presets that share a `group` in an <optgroup>. Presets must already be
+// ordered so that items of the same group are contiguous — otherwise the
+// same group label would render more than once.
+function populateRightBasemapSelect(basemaps, selectedIdx) {
+  const selectEl = document.getElementById("right-basemap-select");
+  if (!selectEl) return null;
+  selectEl.replaceChildren();
+  let currentGroup = null;
+  let parent = selectEl;
+  basemaps.forEach(({ preset }, idx) => {
+    const group = preset.group || "";
+    if (group !== currentGroup) {
+      currentGroup = group;
+      if (group) {
+        parent = document.createElement("optgroup");
+        parent.label = group;
+        selectEl.appendChild(parent);
+      } else {
+        parent = selectEl;
+      }
+    }
+    const opt = document.createElement("option");
+    opt.value = String(idx);
+    opt.textContent = preset.name;
+    parent.appendChild(opt);
+  });
+  selectEl.value = String(selectedIdx);
+  return selectEl;
+}
+
 function init() {
   const initial = readInitialView();
   const mapLeft = createMap("map-left", LEFT_LAYERS[0], initial);
-  const mapRight = createMap("map-right", RIGHT_LAYERS[0], initial);
+  const mapRight = createMap("map-right", RIGHT_LAYERS[0], initial, { addDefault: false });
 
   const handleChange = (center, zoom) => {
     updateStatus(center);
@@ -694,6 +1207,22 @@ function init() {
   L.control
     .layers(null, overlays, { collapsed: true, position: "topright" })
     .addTo(mapLeft);
+
+  // 右ペインの basemap はヘッダの <select> で切り替える。RIGHT_LAYERS の
+  // index 0 をデフォルトで ON にし、select の変更に合わせてレイヤーを差し替える。
+  const rightBasemaps = buildRightBasemaps();
+  let activeRightBasemap = rightBasemaps[0];
+  activeRightBasemap.layer.addTo(mapRight);
+  applyRightPaneHeader(activeRightBasemap.preset);
+  const basemapSelect = populateRightBasemapSelect(rightBasemaps, 0);
+  basemapSelect?.addEventListener("change", () => {
+    const next = rightBasemaps[Number(basemapSelect.value)];
+    if (!next || next === activeRightBasemap) return;
+    mapRight.removeLayer(activeRightBasemap.layer);
+    next.layer.addTo(mapRight);
+    activeRightBasemap = next;
+    applyRightPaneHeader(next.preset);
+  });
 
   // OSM 側のオーバーレイ
   // 陰影用の専用 pane を作り、mix-blend-mode: soft-light で地形を重ねる。

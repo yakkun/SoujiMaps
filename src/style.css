@@ -140,6 +140,52 @@ body {
   color: #c46ade; /* OpenStreetMap (#3b9521 の補色) */
 }
 
+/* 右ペインの basemap 切替プルダウン。<select> のネイティブUIを隠し、
+ * .pane-title と同じ見た目に馴染ませつつ右端に小さな矢印アイコンを付ける。
+ */
+.pane-title-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  padding: 2px 18px 2px 4px;
+  margin-left: -4px;
+  cursor: pointer;
+  border-radius: 4px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M1 3l4 4 4-4' stroke='%23c46ade' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 4px center;
+  transition: background-color 0.15s ease;
+}
+
+.pane-title-select:hover {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.pane-title-select:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* OS のネイティブメニューは白背景になりがちなので、対応ブラウザでは暗く揃える */
+.pane-title-select option {
+  background: var(--bg-elev);
+  color: var(--fg);
+}
+
+.pane-title-select optgroup {
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  font-weight: 600;
+  font-style: normal;
+  letter-spacing: 0.06em;
+}
+
 .pane-link {
   color: var(--fg-muted);
   font-size: 12px;
