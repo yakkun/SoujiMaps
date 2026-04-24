@@ -26,23 +26,10 @@
     <header class="app-header">
       <div class="brand">
         <span class="brand-logo" aria-hidden="true">⛰⛰</span>
-        <div class="brand-text">
-          <h1>Souji Maps</h1>
-        </div>
       </div>
       <div class="status" id="status" aria-live="polite">
-        <span class="status-item">
-          <span class="label">緯度</span>
-          <span id="status-lat">—</span>
-        </span>
-        <span class="status-item">
-          <span class="label">経度</span>
-          <span id="status-lng">—</span>
-        </span>
-        <span class="status-item">
-          <span class="label">ズーム</span>
-          <span id="status-zoom">—</span>
-        </span>
+        <span id="status-lat">—</span>,
+        <span id="status-lng">—</span>
       </div>
       <nav class="controls" aria-label="地図操作">
         <button type="button" id="btn-locate" title="現在地に移動">
@@ -50,6 +37,9 @@
         </button>
         <button type="button" id="btn-copy-url" title="現在位置の共有URLをコピー">
           🔗 URLコピー
+        </button>
+        <button type="button" id="btn-clear-gpx" title="表示中のGPXをクリア" hidden>
+          ✕ GPX
         </button>
       </nav>
     </header>
@@ -60,7 +50,7 @@
           <span class="pane-title">ヤマレコ</span>
           <a
             class="pane-link"
-            href="https://www.yamareco.com/map/"
+            href="https://www.yamareco.com/"
             target="_blank"
             rel="noreferrer noopener"
             >yamareco.com ↗</a

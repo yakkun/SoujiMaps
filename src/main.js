@@ -16,7 +16,7 @@ const MIN_ZOOM = 4;
 const MAX_ZOOM = 18;
 
 const YAMARECO_ATTR =
-  '地図: <a href="https://www.yamareco.com/map/" target="_blank" rel="noreferrer">ヤマレコ 地図プラザ</a> (<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">国土地理院</a>タイル)';
+  '地図: <a href="https://www.yamareco.com/" target="_blank" rel="noreferrer">ヤマレコ</a> (<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noreferrer">国土地理院</a>タイル)';
 const OSM_ATTR =
   '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors';
 
@@ -360,6 +360,280 @@ function linkMaps(a, b, onChange) {
   b.on("move zoom", () => sync(b, a));
 }
 
+// ── GPX drag & drop overlay ──
+// White casing under the pink line / halo behind waypoints for high contrast
+// against any basemap (Strava/RWGPS-style).
+const GPX_TRACK_CASING_STYLE = {
+  color: "#ffffff",
+  weight: 8,
+  opacity: 0.95,
+};
+const GPX_TRACK_STYLE = {
+  color: "#ec4899",
+  weight: 4,
+  opacity: 1,
+};
+const GPX_WAYPOINT_HALO_STYLE = {
+  radius: 8,
+  color: "#ffffff",
+  fillColor: "#ffffff",
+  fillOpacity: 1,
+  weight: 0,
+};
+const GPX_WAYPOINT_STYLE = {
+  radius: 5,
+  color: "#ec4899",
+  fillColor: "#ffffff",
+  fillOpacity: 1,
+  weight: 2,
+};
+
+// XML namespaces in GPX make querySelector unreliable across browsers.
+// getElementsByTagName matches local names, so we use it throughout.
+function parseGpx(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length > 0) return null;
+
+  const tracks = [];
+  Array.from(doc.getElementsByTagName("trk")).forEach((trk) => {
+    Array.from(trk.getElementsByTagName("trkseg")).forEach((seg) => {
+      const pts = [];
+      Array.from(seg.getElementsByTagName("trkpt")).forEach((p) => {
+        const lat = Number(p.getAttribute("lat"));
+        const lng = Number(p.getAttribute("lon"));
+        if (Number.isFinite(lat) && Number.isFinite(lng)) pts.push([lat, lng]);
+      });
+      if (pts.length) tracks.push(pts);
+    });
+  });
+
+  Array.from(doc.getElementsByTagName("rte")).forEach((rte) => {
+    const pts = [];
+    Array.from(rte.getElementsByTagName("rtept")).forEach((p) => {
+      const lat = Number(p.getAttribute("lat"));
+      const lng = Number(p.getAttribute("lon"));
+      if (Number.isFinite(lat) && Number.isFinite(lng)) pts.push([lat, lng]);
+    });
+    if (pts.length) tracks.push(pts);
+  });
+
+  const waypoints = [];
+  Array.from(doc.getElementsByTagName("wpt")).forEach((p) => {
+    const lat = Number(p.getAttribute("lat"));
+    const lng = Number(p.getAttribute("lon"));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const nameEl = p.getElementsByTagName("name")[0];
+    const name = nameEl?.textContent?.trim() || "";
+    waypoints.push({ lat, lng, name });
+  });
+
+  const metaName = doc.getElementsByTagName("metadata")[0]
+    ?.getElementsByTagName("name")[0]?.textContent?.trim();
+  const trkName = doc.getElementsByTagName("trk")[0]
+    ?.getElementsByTagName("name")[0]?.textContent?.trim();
+  const name = metaName || trkName || "";
+
+  return { tracks, waypoints, name };
+}
+
+function buildGpxLayer(gpx) {
+  const layer = L.featureGroup();
+  const popupHtml = gpx.name ? `<strong>${escapeHtml(gpx.name)}</strong>` : "";
+  // Casings first so colored strokes paint on top (canvas renderer respects add order).
+  gpx.tracks.forEach((pts) => {
+    layer.addLayer(L.polyline(pts, GPX_TRACK_CASING_STYLE));
+  });
+  gpx.tracks.forEach((pts) => {
+    const line = L.polyline(pts, GPX_TRACK_STYLE);
+    if (popupHtml) line.bindPopup(popupHtml, { autoPan: false });
+    layer.addLayer(line);
+  });
+  gpx.waypoints.forEach((wpt) => {
+    layer.addLayer(L.circleMarker([wpt.lat, wpt.lng], GPX_WAYPOINT_HALO_STYLE));
+    const marker = L.circleMarker([wpt.lat, wpt.lng], GPX_WAYPOINT_STYLE);
+    if (wpt.name) marker.bindPopup(escapeHtml(wpt.name), { autoPan: false });
+    layer.addLayer(marker);
+  });
+  return layer;
+}
+
+function setupGpxDrop(maps, clearButton) {
+  const overlay = document.createElement("div");
+  overlay.className = "drop-overlay";
+  overlay.innerHTML =
+    '<div class="drop-overlay-text">GPX をドロップして表示</div>';
+  document.body.appendChild(overlay);
+
+  // Track [{leftLayer, rightLayer}] so we can remove cleanly later.
+  const loaded = [];
+  let dragDepth = 0;
+
+  const isFileDrag = (e) =>
+    Array.from(e.dataTransfer?.types || []).includes("Files");
+
+  const showOverlay = (show) => {
+    overlay.classList.toggle("show", show);
+  };
+
+  const updateClearButton = () => {
+    clearButton.hidden = loaded.length === 0;
+  };
+
+  window.addEventListener("dragenter", (e) => {
+    if (!isFileDrag(e)) return;
+    dragDepth++;
+    showOverlay(true);
+  });
+  window.addEventListener("dragleave", (e) => {
+    if (!isFileDrag(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) showOverlay(false);
+  });
+  window.addEventListener("dragover", (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+  });
+  window.addEventListener("drop", async (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    showOverlay(false);
+
+    const files = Array.from(e.dataTransfer.files).filter((f) =>
+      /\.gpx$/i.test(f.name),
+    );
+    if (files.length === 0) {
+      showToast("GPX ファイルではありません");
+      return;
+    }
+
+    let totalBounds = null;
+    let lastName = "";
+    for (const file of files) {
+      try {
+        const text = await file.text();
+        const gpx = parseGpx(text);
+        if (!gpx || (gpx.tracks.length === 0 && gpx.waypoints.length === 0)) {
+          showToast(`${file.name}: ルート/地点が見つかりません`);
+          continue;
+        }
+        const layers = maps.map((m) => {
+          const layer = buildGpxLayer(gpx);
+          layer.addTo(m);
+          return layer;
+        });
+        loaded.push(layers);
+        const bounds = layers[0].getBounds();
+        if (bounds.isValid()) {
+          totalBounds = totalBounds ? totalBounds.extend(bounds) : bounds;
+        }
+        lastName = gpx.name || file.name;
+      } catch (err) {
+        showToast(`${file.name}: 読み込み失敗 (${err.message})`);
+      }
+    }
+
+    if (totalBounds) {
+      // fitBounds on one map; linkMaps will sync the other.
+      maps[0].fitBounds(totalBounds, { padding: [40, 40] });
+      showToast(`${lastName} を表示しました`);
+    }
+    updateClearButton();
+  });
+
+  clearButton.addEventListener("click", () => {
+    loaded.forEach((layers) => {
+      layers.forEach((l, i) => maps[i].removeLayer(l));
+    });
+    loaded.length = 0;
+    updateClearButton();
+    showToast("GPX をクリアしました");
+  });
+}
+
+// Drag the central splitter to resize the two panes. Works for both
+// horizontal (desktop) and vertical (mobile / .vertical class) layouts.
+function makeSplitterDraggable(splitEl, splitterEl, onResize) {
+  const verticalMQ = window.matchMedia("(max-width: 768px)");
+  const isVertical = () =>
+    verticalMQ.matches || splitEl.classList.contains("vertical");
+
+  let dragging = false;
+  let rafId = null;
+  let pendingPct = 50;
+
+  const apply = (pct) => {
+    const clamped = Math.max(15, Math.min(85, pct));
+    if (isVertical()) {
+      splitEl.style.gridTemplateRows = `${clamped}% 6px ${100 - clamped}%`;
+      splitEl.style.gridTemplateColumns = "";
+    } else {
+      splitEl.style.gridTemplateColumns = `${clamped}% 6px ${100 - clamped}%`;
+      splitEl.style.gridTemplateRows = "";
+    }
+    onResize();
+  };
+
+  const schedule = (pct) => {
+    pendingPct = pct;
+    if (rafId != null) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      apply(pendingPct);
+    });
+  };
+
+  const computePct = (clientX, clientY) => {
+    const rect = splitEl.getBoundingClientRect();
+    return isVertical()
+      ? ((clientY - rect.top) / rect.height) * 100
+      : ((clientX - rect.left) / rect.width) * 100;
+  };
+
+  const onDown = (e) => {
+    dragging = true;
+    splitterEl.classList.add("dragging");
+    document.body.style.cursor = isVertical() ? "row-resize" : "col-resize";
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+  };
+
+  const onMove = (e) => {
+    if (!dragging) return;
+    const point = e.touches ? e.touches[0] : e;
+    e.preventDefault();
+    schedule(computePct(point.clientX, point.clientY));
+  };
+
+  const onUp = () => {
+    if (!dragging) return;
+    dragging = false;
+    splitterEl.classList.remove("dragging");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  };
+
+  const reset = () => {
+    splitEl.style.gridTemplateColumns = "";
+    splitEl.style.gridTemplateRows = "";
+    onResize();
+  };
+
+  splitterEl.addEventListener("mousedown", onDown);
+  splitterEl.addEventListener("touchstart", onDown, { passive: false });
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("touchmove", onMove, { passive: false });
+  window.addEventListener("mouseup", onUp);
+  window.addEventListener("touchend", onUp);
+  window.addEventListener("touchcancel", onUp);
+  splitterEl.addEventListener("dblclick", reset);
+
+  // Wipe inline sizes when orientation flips so the new axis starts at 50/50.
+  const onMqChange = () => reset();
+  if (verticalMQ.addEventListener) verticalMQ.addEventListener("change", onMqChange);
+  else verticalMQ.addListener(onMqChange);
+}
+
 function showToast(text) {
   let toast = document.querySelector(".toast");
   if (!toast) {
@@ -373,10 +647,9 @@ function showToast(text) {
   showToast._t = setTimeout(() => toast.classList.remove("show"), 1800);
 }
 
-function updateStatus(center, zoom) {
+function updateStatus(center) {
   document.getElementById("status-lat").textContent = center.lat.toFixed(5);
   document.getElementById("status-lng").textContent = center.lng.toFixed(5);
-  document.getElementById("status-zoom").textContent = String(zoom);
 }
 
 function init() {
@@ -385,7 +658,7 @@ function init() {
   const mapRight = createMap("map-right", RIGHT_LAYERS[0], initial);
 
   const handleChange = (center, zoom) => {
-    updateStatus(center, zoom);
+    updateStatus(center);
     writeViewToHash(center.lat, center.lng, zoom);
   };
 
@@ -460,6 +733,14 @@ function init() {
     mapRight.invalidateSize();
   });
 
+  const splitEl = document.getElementById("split");
+  const splitterEl = splitEl.querySelector(".splitter");
+  splitterEl.title = "ドラッグでサイズ調整 / ダブルクリックで均等";
+  makeSplitterDraggable(splitEl, splitterEl, () => {
+    mapLeft.invalidateSize();
+    mapRight.invalidateSize();
+  });
+
   document.getElementById("btn-locate").addEventListener("click", () => {
     if (!navigator.geolocation) {
       showToast("この端末は位置情報に対応していません");
@@ -477,6 +758,8 @@ function init() {
     );
   });
 
+
+  setupGpxDrop([mapLeft, mapRight], document.getElementById("btn-clear-gpx"));
 
   document.getElementById("btn-copy-url").addEventListener("click", async () => {
     const url = window.location.href;
