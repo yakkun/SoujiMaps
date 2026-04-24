@@ -224,6 +224,30 @@ body {
   transform: translateY(1px);
 }
 
+.controls-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  border: 1px solid var(--border);
+  background: var(--btn-bg);
+  color: var(--fg-muted);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.controls-link:hover {
+  background: var(--btn-bg-hover);
+  color: var(--fg);
+}
+
+.controls-link:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .split {
   flex: 1 1 auto;
   min-height: 0;
