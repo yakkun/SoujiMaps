@@ -301,6 +301,25 @@ const buildEsriTileLayer = (service, { maxNativeZoom = 19, source = "" } = {}) =
     },
   );
 
+// ── ベクタータイル (MapLibre GL) ──
+// index.html 側で maplibre-gl と @maplibre/maplibre-gl-leaflet を <script>
+// で読み込んでいる。CDN 失敗時に L.maplibreGL が未定義となるので、preset
+// を RIGHT_LAYERS に並べる際は HAS_MAPLIBRE を `requires` に渡して黙って
+// 非表示にする。
+const HAS_MAPLIBRE = typeof L !== "undefined" && typeof L.maplibreGL === "function";
+
+const GSI_VECTOR_ATTR =
+  '地図: <a href="https://maps.gsi.go.jp/vector/" target="_blank" rel="noreferrer">地理院地図Vector</a>';
+const REKICHIZU_ATTR =
+  '地図: <a href="https://rekichizu.jp/" target="_blank" rel="noreferrer">れきちず</a> &copy; <a href="https://www.mierune.co.jp/" target="_blank" rel="noreferrer">MIERUNE</a> / 加藤創 (CC BY-NC-ND 4.0)';
+
+// maplibre-gl-leaflet は style URL を食わせるだけで Leaflet 互換レイヤー
+// を返す。Leaflet 側の maxZoom は createMap で固定 (4..18) しているので
+// ここでは面倒を見なくてよい。attribution は Leaflet の attribution
+// control に転送される。
+const buildMaplibreLayer = (style, attribution) =>
+  L.maplibreGL({ style, attribution });
+
 // ── API キーが必要なプロバイダ ──
 // `src/config.js` の値は window.SOUJI_MAPS_KEYS から読む。localStorage に
 // "souji-maps-keys" が入っていればそちらを優先 (リポジトリに鍵を置きたく
@@ -731,6 +750,82 @@ const RIGHT_LAYERS = [
     linkText: "mapbox.com ↗",
     requires: KEYS.mapbox,
     build: () => buildMapboxTileLayer("satellite-streets-v12"),
+  },
+
+  // ── ベクター (日本) ──
+  // MapLibre GL 経由。maplibre-gl CDN が落ちていれば HAS_MAPLIBRE=false で
+  // グループごと非表示になる。
+  {
+    group: "ベクター (日本)",
+    name: "地理院ベクター 標準",
+    linkHref: "https://maps.gsi.go.jp/vector/",
+    linkText: "maps.gsi.go.jp/vector ↗",
+    requires: HAS_MAPLIBRE,
+    build: () =>
+      buildMaplibreLayer(
+        "https://gsi-cyberjapan.github.io/gsivectortile-mapbox-gl-js/std.json",
+        GSI_VECTOR_ATTR,
+      ),
+  },
+  {
+    group: "ベクター (日本)",
+    name: "地理院ベクター 淡色",
+    linkHref: "https://maps.gsi.go.jp/vector/",
+    linkText: "maps.gsi.go.jp/vector ↗",
+    requires: HAS_MAPLIBRE,
+    build: () =>
+      buildMaplibreLayer(
+        "https://gsi-cyberjapan.github.io/gsivectortile-mapbox-gl-js/pale.json",
+        GSI_VECTOR_ATTR,
+      ),
+  },
+  {
+    group: "ベクター (日本)",
+    name: "地理院ベクター 白地図",
+    linkHref: "https://maps.gsi.go.jp/vector/",
+    linkText: "maps.gsi.go.jp/vector ↗",
+    requires: HAS_MAPLIBRE,
+    build: () =>
+      buildMaplibreLayer(
+        "https://gsi-cyberjapan.github.io/gsivectortile-mapbox-gl-js/blank.json",
+        GSI_VECTOR_ATTR,
+      ),
+  },
+  {
+    group: "ベクター (日本)",
+    name: "れきちず (江戸)",
+    linkHref: "https://rekichizu.jp/",
+    linkText: "rekichizu.jp ↗",
+    requires: HAS_MAPLIBRE,
+    build: () =>
+      buildMaplibreLayer(
+        "https://mierune.github.io/rekichizu-style/styles/street/style.json",
+        REKICHIZU_ATTR,
+      ),
+  },
+  {
+    group: "ベクター (日本)",
+    name: "れきちず ひらがな",
+    linkHref: "https://rekichizu.jp/",
+    linkText: "rekichizu.jp ↗",
+    requires: HAS_MAPLIBRE,
+    build: () =>
+      buildMaplibreLayer(
+        "https://mierune.github.io/rekichizu-style/styles/street/style_hira.json",
+        REKICHIZU_ATTR,
+      ),
+  },
+  {
+    group: "ベクター (日本)",
+    name: "れきちず English",
+    linkHref: "https://rekichizu.jp/",
+    linkText: "rekichizu.jp ↗",
+    requires: HAS_MAPLIBRE,
+    build: () =>
+      buildMaplibreLayer(
+        "https://mierune.github.io/rekichizu-style/styles/street/style_en.json",
+        REKICHIZU_ATTR,
+      ),
   },
 ];
 
