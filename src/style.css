@@ -419,6 +419,14 @@ body {
   font-family: inherit;
 }
 
+/* MapLibre vector basemaps render to a transparent WebGL canvas; when the
+   style lacks an opaque background layer (or before tiles paint), the dark
+   .leaflet-container shows through and the map becomes unreadable. Paint
+   the MapLibre container plain white so vector tiles sit on a sane backdrop. */
+.maplibregl-map {
+  background: #fff;
+}
+
 .leaflet-control-attribution {
   background: rgba(15, 23, 42, 0.75) !important;
   color: var(--fg-muted) !important;
